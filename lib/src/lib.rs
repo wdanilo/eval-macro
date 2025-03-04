@@ -12,17 +12,18 @@
 //! | :---                         | :---              | :---                               | :---                 |
 //! | **Input**                    | [Token Stream][1] | **Rust Code** or [Token Stream][1] | [Macro Fragments][2] |
 //! | **Output**                   | [Token Stream][1] | **Rust Code** or [Token Stream][1] | [Macro Fragments][2] |
-//! | **Hygienic**                 | ❌                | ❌                                 | ✅                   |
 //! | **Advanced transformations** | ✅                | ✅                                 | ❌                   |
 //! | **Easy to define**           | ❌                | ✅                                 | ✅                   |
 //! | **Easy to read**             | ❌                | ✅                                 | ✅                   |
 //! | **Reusable**                 | ✅                | ❌                                 | ✅                   |
+//! | **Hygienic**                 | ❌                | ❌                                 | ✅                   |
 //!
 //! [1]: https://doc.rust-lang.org/proc_macro/struct.TokenStream.html
 //! [2]: https://doc.rust-lang.org/reference/macros-by-example.html#metavariables
 //!
-//! In short, **Eval Macros** offer procedural macro power with `macro_rules!` simplicity. However,
-//! they are **not reusable** — you cannot export an Eval Macro for use in other crates.
+//! In short, Eval Macros provide even greater flexibility and power than procedural macros, while
+//! preserving the simplicity of `macro_rules!` macros. However, they are not reusable — you cannot
+//! export an Eval Macro for use in other crates.
 //!
 //! <br/>
 //! <br/>
@@ -30,11 +31,9 @@
 //! # 🤩 Syntax
 //!
 //! Use the `eval!` macro to create and run an Eval Macro inline. The content of the macro is
-//! **regular Rust code**, which will be compiled and executed at build time.
-//!
-//! Inside the `eval!` block, you can use the `output!` macro to emit Rust code. `output!` supports
-//! **double-brace interpolation**, allowing you to embed variables directly into the generated
-//! code.
+//! regular Rust code, which will be compiled and executed at build time. Inside the `eval!`
+//! block, you can use the `output!` macro to emit Rust code. `output!` supports double-brace
+//! interpolation, allowing you to embed variables directly into the generated code.
 //!
 //! Example:
 //!
@@ -139,11 +138,167 @@
 //! <br/>
 //! <br/>
 //!
-//! # 📖 How It Works
+//! # 🪲 Logging and Output Protocol
 //!
-//! The content inside `eval!` is **pasted into the `main` function** of a temporary Rust project
-//! created in `$HOME/.cargo/eval-macro/<project-id>`. This project is **created, compiled,
-//! executed, and removed at build time**, and its `stdout` becomes the generated Rust code. The
+//! During compilation, `eval!` blocks can print messages directly to `stdout` and `stderr`.
+//! This allows you to emit debug information, diagnostics, and the generated code itself during
+//! macro evaluation. Communication between the `eval!` macro and the build system follows a
+//! simple line-based protocol. Each printed line can optionally begin with a prefix,
+//! indicating its purpose:
+//!
+//! | Prefix     | Meaning |
+//! | :---       | :---    |
+//! | _(none)_   | Debug log message (informational output). |
+//! | `OUTPUT:`  | A line of generated Rust code to be included in the final macro output. |
+//! | `WARNING:` | A compilation warning. This is printed to `stdout` until [Procedural Macro Diagnostics][3] is stabilized. |
+//! | `ERROR:`   | A compilation error. This is printed to `stdout` until [Procedural Macro Diagnostics][3] is stabilized. |
+//!
+//! ### Utility Functions and Macros
+//!
+//! To simplify working with this protocol, `eval!` blocks have access to a set of helper
+//! functions and macros that automatically apply the correct prefixes to each line.
+//!
+//! #### Functions
+//!
+//! These functions allow you to transform multi-line strings by adding the appropriate prefixes:
+//!
+//! ```rust
+//! fn prefix_lines_with(prefix: &str, input: &str) -> String {
+//!     // Adds the given prefix to each line of the input string.
+//!     # panic!()
+//! }
+//!
+//! fn prefix_lines_with_output(input: &str) -> String {
+//!     // Adds `OUTPUT:` to each line of the input string.
+//!     # panic!()
+//! }
+//!
+//! fn prefix_lines_with_warning(input: &str) -> String {
+//!     // Adds `WARNING:` to each line of the input string.
+//!     # panic!()
+//! }
+//!
+//! fn prefix_lines_with_error(input: &str) -> String {
+//!     // Adds `ERROR:` to each line of the input string.
+//!     # panic!()
+//! }
+//! ```
+//!
+//! #### Macros
+//!
+//! These macros allow you to directly print prefixed lines to `stdout`, following the
+//! protocol:
+//!
+//! ```rust
+//! macro_rules! println_output {
+//!     // Prints a line prefixed with `OUTPUT:`.
+//!     # () => {};
+//! }
+//!
+//! macro_rules! println_warning {
+//!     // Prints a line prefixed with `WARNING:`.
+//!     # () => {};
+//! }
+//!
+//! macro_rules! println_error {
+//!     // Prints a line prefixed with `ERROR:`.
+//!     # () => {};
+//! }
+//! ```
+//!
+//! These tools ensure consistent formatting and correct communication between `eval!` blocks
+//! and the build system, reducing the risk of malformed output.
+//!
+//! [3]: https://github.com/rust-lang/rust/issues/54140
+//!
+//! <br/>
+//! <br/>
+//!
+//! # 📚 Attributes
+//!
+//! The `eval!` macro supports global attributes that can be placed at the top of the block.
+//! These attributes allow you to customize both the project's Cargo configuration and its
+//! project-wide attributes.
+//!
+//! ### Supported Cargo Configuration Attributes
+//!
+//! | Attribute            | Default |
+//! | :---                  | :---    |
+//! | `#![edition(...)]`   | `2024`  |
+//! | `#![resolver(...)]`  | `3`     |
+//! | `#![dependency(...)]`| `[]`    |
+//!
+//! ### Supported Standard Attributes
+//!
+//! In addition to Cargo settings, the following standard Rust attributes are supported:
+//!
+//! - `#![feature(...)]`
+//! - `#![allow(...)]`
+//! - `#![expect(...)]`
+//! - `#![warn(...)]`
+//! - `#![deny(...)]`
+//! - `#![forbid(...)]`
+//!
+//! Example:
+//!
+//! ```rust
+//! use eval_macro::eval;
+//!
+//! eval! {
+//!     #![edition(2024)]
+//!     #![resolver(3)]
+//!     #![dependency(anyhow = "1.0")]
+//!
+//!     type Result<T> = anyhow::Result<T>;
+//!     // ...
+//! }
+//! # fn main() {}
+//! ```
+//!
+//! This system allows each `eval!` macro block to define its own dependencies and configuration
+//! without affecting your project's main `Cargo.toml` or global settings.
+//!
+//! <br/>
+//! <br/>
+//!
+//! # 🧱 Working with Token Streams
+//!
+//! If you prefer to work directly with token streams instead of plain Rust code, you can
+//! leverage the `proc-macro2` crate to parse source code into a `TokenStream` and then
+//! generate output using the `quote` crate.
+//!
+//! This allows you to process and manipulate Rust code programmatically within an `eval!` block,
+//! similar to how procedural macros operate — but with the flexibility of the `eval!` environment.
+//!
+//! ```
+//! use eval_macro::eval;
+//!
+//! eval! {
+//!     #![dependency(proc-macro2 = "1")]
+//!     #![dependency(quote = "1")]
+//!     use proc_macro2::TokenStream;
+//!     use quote::quote;
+//!     let tokens: TokenStream = SOURCE_CODE.parse().unwrap();
+//!     // ...
+//!     let out = quote! {
+//!         pub struct Test {}
+//!     };
+//!     println_output!("{}", out.to_string());
+//! }
+//!
+//! type Alias = Test;
+//!
+//! # fn main() {}
+//! ```
+//!
+//! <br/>
+//! <br/>
+//!
+//! # 📖 How It Works Under The Hood
+//!
+//! The content inside `eval!` is pasted into the `main` function of a temporary Rust project
+//! created in `$HOME/.cargo/eval-macro/<project-id>`. This project is created, compiled,
+//! executed, and removed at build time, and its `stdout` becomes the generated Rust code. The
 //! generated `main` function looks something like this:
 //!
 //! ```
@@ -152,8 +307,9 @@
 //! fn main() {
 //!     let mut output_buffer = String::new();
 //!     // Your code.
-//!     println!("{output_buffer}");
+//!     println!("{}", prefix_lines_with_output(&output_buffer));
 //! }
+//! # fn prefix_lines_with_output(input: &str) -> String { String::new() }
 //! ```
 //!
 //! The `output!` macro is essentially a shortcut for writing to `output_buffer` using `format!`,
@@ -208,93 +364,33 @@
 //!     for (ix, name) in components.iter().enumerate() {
 //!         let dim = ix + 1;
 //!         let cons = components[0..dim].join(",");
-//!         output_buffer.push_str(&format!("
-//!             enum Position{dim} {{
-//!                 {cons}
-//!             }}
-//!         "));
+//!         output_buffer.push_str(
+//!             &format!("
+//!                 enum Position{dim} {{
+//!                     {cons}
+//!                 }}
+//!             ")
+//!         );
 //!     }
 //! }
 //! # fn main() {}
 //! ```
 //!
-//! <br/>
-//! <br/>
-//!
-//! # 📚 Attributes
-//!
-//! The `eval!` macro supports **global attributes** that can be placed at the top of the block.
-//! These attributes allow you to customize both the **project's Cargo configuration** and its
-//! **project-wide attributes**.
-//!
-//! ### Supported Cargo Configuration Attributes
-//!
-//! | Attribute            | Default |
-//! | :---                  | :---    |
-//! | `#![edition(...)]`   | `2024`  |
-//! | `#![resolver(...)]`  | `3`     |
-//! | `#![dependency(...)]`| `[]`    |
-//!
-//! ### Supported Standard Attributes
-//!
-//! In addition to Cargo settings, the following **standard Rust attributes** are supported:
-//!
-//! - `#![feature(...)]`
-//! - `#![allow(...)]`
-//! - `#![expect(...)]`
-//! - `#![warn(...)]`
-//! - `#![deny(...)]`
-//! - `#![forbid(...)]`
-//!
-//! Example:
-//!
-//! ```rust
-//! use eval_macro::eval;
-//!
-//! eval! {
-//!     #![edition(2024)]
-//!     #![resolver(3)]
-//!     #![dependency(anyhow = "1.0")]
-//!
-//!     type Result<T> = anyhow::Result<T>;
-//!     // ...
-//! }
-//! # fn main() {}
-//! ```
-//!
-//! This system allows each `eval!` macro block to define its own dependencies and configuration
-//! **without affecting your project's main `Cargo.toml` or global settings**.
-//!
-//! <br/>
-//! <br/>
-//! 
-//! # 🧱 Working with Token Streams
-//!
-//! If you prefer to work directly with **token streams** instead of plain Rust code, you can
-//! leverage the `proc-macro2` crate to **parse source code into a `TokenStream`** and then
-//! **generate output using the `quote` crate**.
-//!
-//! This allows you to process and manipulate Rust code programmatically within an `eval!` block,
-//! similar to how procedural macros operate — but with the flexibility of the `eval!` environment.
+//! Which, ultimately, is equivalent to:
 //!
 //! ```
 //! use eval_macro::eval;
 //!
 //! eval! {
-//!     #![dependency(proc-macro2 = "1")]
-//!     #![dependency(quote = "1")]
-//!     use proc_macro2::TokenStream;
-//!     use quote::quote;
-//!     let tokens: TokenStream = SOURCE_CODE.parse().unwrap();
-//!     // ...
-//!     let out = quote! {
-//!         pub struct Test {}
-//!     };
-//!     println!("{}", out.to_string());
+//!     let components = ["X", "Y", "Z", "W"];
+//!     for (ix, name) in components.iter().enumerate() {
+//!         let dim = ix + 1;
+//!         let cons = components[0..dim].join(",");
+//!         println!("OUTPUT: enum Position{dim} {{");
+//!         println!("OUTPUT:     {cons}");
+//!         println!("OUTPUT: }}");
+//!     }
 //! }
-//!
-//! type Alias = Test;
-//!
 //! # fn main() {}
 //! ```
 //!

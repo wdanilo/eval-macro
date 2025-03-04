@@ -25,6 +25,10 @@ const DEBUG: bool = false;
 
 const NAME: &str = "eval_macro";
 
+const OUTPUT_PREFIX: &str = "OUTPUT:";
+const WARNING_PREFIX: &str = "WARNING:";
+const ERROR_PREFIX: &str = "ERROR:";
+
 /// Rust keywords for special handling. This is not needed for this macro to work, it is only used
 /// to make `IntelliJ` / `RustRover` work correctly, as their `TokenStream` spans are incorrect.
 const KEYWORDS: &[&str] = &[
@@ -43,6 +47,44 @@ const PRELUDE: &str = "
             $target.push_str(&format!( $($ts)* ));
             $target.push_str(\"\n\");
         };
+    }
+
+    macro_rules! println_output {
+        ($($ts:tt)*) => {
+            println!(\"{}\", prefix_lines_with_output(&format!( $($ts)* )));
+        };
+    }
+
+    macro_rules! println_warning {
+        ($($ts:tt)*) => {
+            println!(\"{}\", prefix_lines_with_warning(&format!( $($ts)* )));
+        };
+    }
+
+    macro_rules! println_error {
+        ($($ts:tt)*) => {
+            println!(\"{}\", prefix_lines_with_error(&format!( $($ts)* )));
+        };
+    }
+
+    fn prefix_lines_with(prefix: &str, input: &str) -> String {
+        input
+            .lines()
+            .map(|line| format!(\"{prefix}: {line}\"))
+            .collect::<Vec<_>>()
+            .join(\"\\n\")
+    }
+
+    fn prefix_lines_with_output(input: &str) -> String {
+        prefix_lines_with(\"OUTPUT\", input)
+    }
+
+    fn prefix_lines_with_warning(input: &str) -> String {
+        prefix_lines_with(\"WARNING\", input)
+    }
+
+    fn prefix_lines_with_error(input: &str) -> String {
+        prefix_lines_with(\"ERROR\", input)
     }
 
     fn sum_combinations(n: usize) -> Vec<Vec<usize>> {
@@ -447,14 +489,29 @@ pub fn eval(input_raw: proc_macro::TokenStream) -> proc_macro::TokenStream {
         fn main() {{
             let mut output_buffer = String::new();
             {input_str}
-            println!(\"{{output_buffer}}\");
+            println!(\"{{}}\", prefix_lines_with_output(&output_buffer));
         }}",
     );
 
     create_project_skeleton(&project_dir, cfg, &main_content);
     let output = run_cargo_project(&project_dir);
     fs::remove_dir_all(&project_dir).ok();
-    let out: TokenStream = output.parse().expect("Failed to parse generated code.");
+    let mut code = String::new();
+    for line in output.split('\n') {
+        let line_trimmed = line.trim();
+        if line_trimmed.starts_with(OUTPUT_PREFIX) {
+            code.push_str(&line_trimmed[OUTPUT_PREFIX.len()..]);
+            code.push('\n');
+        } else if line_trimmed.starts_with(WARNING_PREFIX) {
+            println!("[WARNING] {}", &line_trimmed[WARNING_PREFIX.len()..]);
+        } else if line_trimmed.starts_with(ERROR_PREFIX) {
+            println!("[ERROR] {}", &line_trimmed[ERROR_PREFIX.len()..]);
+        } else if line_trimmed.len() > 0 {
+            println!("{line}");
+        }
+    }
+
+    let out: TokenStream = code.parse().expect("Failed to parse generated code.");
     if DEBUG {
         println!("OUT: {out}");
     }
