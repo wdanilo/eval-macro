@@ -8,7 +8,7 @@ keywords = ["macro", "macro_rules", "procedural", "eval", "inline"]
 license = "MIT OR Apache-2.0"
 
 [dependencies]
-eval-macro-internal = { path = "../macro" }
+eval-macro-internal = { version = "0.1.0", path = "../macro" }
 
 [lib]
 crate-type = ["cdylib", "rlib"]
