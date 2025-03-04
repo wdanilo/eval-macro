@@ -6,6 +6,7 @@ edition = { workspace = true }
 description = "A powerful yet easy-to-use Rust macro that generates code by evaluating inline Rust logic at compile time."
 keywords = ["macro", "macro_rules", "procedural", "eval", "inline"]
 license = "MIT OR Apache-2.0"
+repository = "https://github.com/wdanilo/eval-macro"
 
 [dependencies]
 eval-macro-internal = { version = "0.1.0", path = "../macro" }
