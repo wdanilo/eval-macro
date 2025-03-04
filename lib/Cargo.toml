@@ -1,6 +1,6 @@
 [package]
 name = "eval-macro"
-version = "0.3.0"
+version = "0.4.0"
 authors = ["Wojciech Danilo <wojciech.danilo@gmail.com>"]
 description = "A powerful yet easy-to-use Rust macro that generates code by evaluating inline Rust logic at compile time."
 keywords = ["macro", "macro_rules", "procedural", "eval", "inline"]
