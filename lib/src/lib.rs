@@ -8,15 +8,18 @@
 //! **Eval Macro** introduces a new macro type for Rust, blending power and ease of use. Here’s how
 //! it compares to `macro_rules!` and procedural macros:
 //!
-//! |                              | Proc Macro     | Eval Macro | Macro Rules     |
-//! | :---                         | :---           | :---       | :---            |
-//! | **Input**                    | Token Stream   | Rust Code  | Macro Fragments |
-//! | **Output**                   | Token Stream   | Rust Code  | Macro Fragments |
-//! | **Hygienic**                 | ❌             | ❌         | ✅              |
-//! | **Advanced transformations** | ✅             | ✅         | ❌              |
-//! | **Easy to define**           | ❌             | ✅         | ✅              |
-//! | **Easy to read**             | ❌             | ✅         | ✅              |
-//! | **Reusable**                 | ✅             | ❌         | ✅              |
+//! |                              | Proc Macro        | Eval Macro                         | Macro Rules          |
+//! | :---                         | :---              | :---                               | :---                 |
+//! | **Input**                    | [Token Stream][1] | **Rust Code** or [Token Stream][1] | [Macro Fragments][2] |
+//! | **Output**                   | [Token Stream][1] | **Rust Code** or [Token Stream][1] | [Macro Fragments][2] |
+//! | **Hygienic**                 | ❌                | ❌                                 | ✅                   |
+//! | **Advanced transformations** | ✅                | ✅                                 | ❌                   |
+//! | **Easy to define**           | ❌                | ✅                                 | ✅                   |
+//! | **Easy to read**             | ❌                | ✅                                 | ✅                   |
+//! | **Reusable**                 | ✅                | ❌                                 | ✅                   |
+//!
+//! [1]: https://doc.rust-lang.org/proc_macro/struct.TokenStream.html
+//! [2]: https://doc.rust-lang.org/reference/macros-by-example.html#metavariables
 //!
 //! In short, **Eval Macros** offer procedural macro power with `macro_rules!` simplicity. However,
 //! they are **not reusable** — you cannot export an Eval Macro for use in other crates.
@@ -138,15 +141,18 @@
 //!
 //! # 📖 How It Works
 //!
-//! The content inside `eval!` is **pasted into the `main` function** of a temporary Rust project.
-//! This project is **compiled and executed at build time**, and its `stdout` becomes the generated
-//! Rust code. The generated `main` function looks something like this:
+//! The content inside `eval!` is **pasted into the `main` function** of a temporary Rust project
+//! created in `$HOME/.cargo/eval-macro/<project-id>`. This project is **created, compiled,
+//! executed, and removed at build time**, and its `stdout` becomes the generated Rust code. The
+//! generated `main` function looks something like this:
 //!
-//! ```ignore
+//! ```
+//! const SOURCE_CODE: &str = "..."; // Your code as a string.
+//!
 //! fn main() {
 //!     let mut output_buffer = String::new();
-//!     {your_code}
-//!     println!("{{output_buffer}}");
+//!     // Your code.
+//!     println!("{output_buffer}");
 //! }
 //! ```
 //!
@@ -181,6 +187,7 @@
 //!     for (ix, name) in components.iter().enumerate() {
 //!         let dim = ix + 1;
 //!         let cons = components[0..dim].join(",");
+//!         // The `write_ln!` macro is delivered by this library.
 //!         write_ln!(output_buffer, "
 //!             enum Position{dim} {{
 //!                 {cons}
@@ -214,24 +221,82 @@
 //! <br/>
 //! <br/>
 //!
-//! # 📚 Dependencies
+//! # 📚 Attributes
 //!
-//! Each `eval!` block can define **its own Cargo dependencies**, allowing you to pull in external
-//! crates directly within the macro context. This is done using a special **pragma attribute**:
-//! `#![dependency(...)]`.
+//! The `eval!` macro supports **global attributes** that can be placed at the top of the block.
+//! These attributes allow you to customize both the **project's Cargo configuration** and its
+//! **project-wide attributes**.
 //!
-//! ```
+//! ### Supported Cargo Configuration Attributes
+//!
+//! | Attribute            | Default |
+//! | :---                  | :---    |
+//! | `#![edition(...)]`   | `2024`  |
+//! | `#![resolver(...)]`  | `3`     |
+//! | `#![dependency(...)]`| `[]`    |
+//!
+//! ### Supported Standard Attributes
+//!
+//! In addition to Cargo settings, the following **standard Rust attributes** are supported:
+//!
+//! - `#![feature(...)]`
+//! - `#![allow(...)]`
+//! - `#![expect(...)]`
+//! - `#![warn(...)]`
+//! - `#![deny(...)]`
+//! - `#![forbid(...)]`
+//!
+//! Example:
+//!
+//! ```rust
 //! use eval_macro::eval;
 //!
 //! eval! {
+//!     #![edition(2024)]
+//!     #![resolver(3)]
 //!     #![dependency(anyhow = "1.0")]
+//!
 //!     type Result<T> = anyhow::Result<T>;
 //!     // ...
 //! }
 //! # fn main() {}
 //! ```
-//! This flexibility allows `eval!` macros to seamlessly leverage third-party crates, without
-//! affecting your project's main `Cargo.toml`.
+//!
+//! This system allows each `eval!` macro block to define its own dependencies and configuration
+//! **without affecting your project's main `Cargo.toml` or global settings**.
+//!
+//! <br/>
+//! <br/>
+//! 
+//! # 🧱 Working with Token Streams
+//!
+//! If you prefer to work directly with **token streams** instead of plain Rust code, you can
+//! leverage the `proc-macro2` crate to **parse source code into a `TokenStream`** and then
+//! **generate output using the `quote` crate**.
+//!
+//! This allows you to process and manipulate Rust code programmatically within an `eval!` block,
+//! similar to how procedural macros operate — but with the flexibility of the `eval!` environment.
+//!
+//! ```
+//! use eval_macro::eval;
+//!
+//! eval! {
+//!     #![dependency(proc-macro2 = "1")]
+//!     #![dependency(quote = "1")]
+//!     use proc_macro2::TokenStream;
+//!     use quote::quote;
+//!     let tokens: TokenStream = SOURCE_CODE.parse().unwrap();
+//!     // ...
+//!     let out = quote! {
+//!         pub struct Test {}
+//!     };
+//!     println!("{}", out.to_string());
+//! }
+//!
+//! type Alias = Test;
+//!
+//! # fn main() {}
+//! ```
 //!
 //! <br/>
 //! <br/>

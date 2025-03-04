@@ -93,32 +93,57 @@ fn get_output_dir() -> PathBuf {
 // === Project Management ===
 // ==========================
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
+struct ProjectConfig {
+    cargo: CargoConfig,
+    lib: LibConfig,
+}
+
+#[derive(Debug, Default)]
 struct CargoConfig {
     edition: Option<String>,
-    dependencies: Vec<String>
+    resolver: Option<String>,
+    dependencies: Vec<String>,
+}
+
+#[derive(Debug, Default)]
+struct LibConfig {
+    features: Vec<String>,
+    allow: Vec<String>,
+    expect: Vec<String>,
+    warn: Vec<String>,
+    deny: Vec<String>,
+    forbid: Vec<String>,
 }
 
 impl CargoConfig {
-    fn new(dependencies: Vec<String>) -> Self {
-        Self {
-            edition: None,
-            dependencies
-        }
-    }
-
     fn print(&self) -> String {
         let edition = self.edition.as_ref().map_or("2024", |t| t.as_str());
+        let resolver = self.resolver.as_ref().map_or("3", |t| t.as_str());
         let dependencies = self.dependencies.join("\n");
         format!("
             [package]
-            name = \"eval_project\"
-            version = \"1.0.0\"
-            edition = \"{edition}\"
+            name     = \"eval_project\"
+            version  = \"1.0.0\"
+            edition  = \"{edition}\"
+            resolver = \"{resolver}\"
 
             [dependencies]
             {dependencies}
         ")
+    }
+}
+
+impl LibConfig {
+    fn print(&self) -> String {
+        let mut out = vec![];
+        out.extend(self.features.iter().map(|t| format!("#![feature({})]", t)));
+        out.extend(self.allow.iter().map(|t| format!("#![allow({})]", t)));
+        out.extend(self.expect.iter().map(|t| format!("#![expect({})]", t)));
+        out.extend(self.warn.iter().map(|t| format!("#![warn({})]", t)));
+        out.extend(self.deny.iter().map(|t| format!("#![deny({})]", t)));
+        out.extend(self.forbid.iter().map(|t| format!("#![forbid({})]", t)));
+        out.join("\n")
     }
 }
 
@@ -128,14 +153,14 @@ fn project_name_from_input(input_str: &str) -> String {
     format!("project_{:016x}", hasher.finish())
 }
 
-fn create_project_skeleton(project_dir: &Path, cargo_config: CargoConfig, main_content: &str) {
+fn create_project_skeleton(project_dir: &Path, cfg: ProjectConfig, main_content: &str) {
     let src_dir = project_dir.join("src");
     if !src_dir.exists() {
         fs::create_dir_all(&src_dir).expect("Failed to create src directory.");
     }
 
     let cargo_toml = project_dir.join("Cargo.toml");
-    let cargo_toml_content = cargo_config.print();
+    let cargo_toml_content = cfg.cargo.print();
     fs::write(&cargo_toml, cargo_toml_content).expect("Failed to write Cargo.toml.");
 
     let main_rs = src_dir.join("main.rs");
@@ -163,18 +188,40 @@ fn run_cargo_project(project_dir: &PathBuf) -> String {
 // === Top-level Attribute Parsing ===
 // ===================================
 
-fn extract_dependencies(tokens: TokenStream) -> (TokenStream, Vec<String>) {
+fn extract_dependencies(cfg: &mut ProjectConfig, tokens: TokenStream) -> TokenStream {
     let (tokens2, attributes) = extract_top_level_attributes(tokens);
-    let mut dependencies = Vec::new();
     for attr in attributes {
-        let pfx = "dependency(";
-        if attr.starts_with(pfx) && attr.ends_with(")") {
-            dependencies.push(attr[pfx.len()..attr.len()-1].to_string());
+        if let Some(pos) = attr.find('(') {
+            let name = &attr[..pos];
+            let value = (&attr[pos + 1.. attr.len() - 1]).to_string(); // Skipping ")".
+            match name {
+                "dependency" => cfg.cargo.dependencies.push(value),
+                "edition" => {
+                    if cfg.cargo.edition.is_some() {
+                        panic!("Edition already set.");
+                    }
+                    cfg.cargo.edition = Some(value);
+                },
+                "resolver" => {
+                    if cfg.cargo.resolver.is_some() {
+                        panic!("Resolver already set.");
+                    }
+                    cfg.cargo.resolver = Some(value);
+                },
+
+                "feature" => cfg.lib.features.push(value),
+                "allow" => cfg.lib.allow.push(value),
+                "expect" => cfg.lib.expect.push(value),
+                "warn" => cfg.lib.warn.push(value),
+                "deny" => cfg.lib.deny.push(value),
+                "forbid" => cfg.lib.forbid.push(value),
+                _ => panic!("Invalid attribute: {attr}"),
+            }
         } else {
             panic!("Invalid attribute: {attr}");
         }
     }
-    (tokens2, dependencies)
+    tokens2
 }
 
 /// Extract all top-level attributes (`#![...]`) from the input `TokenStream` and return the
@@ -374,10 +421,11 @@ fn print_internal(tokens: &TokenStream) -> PrintOutput {
 
 #[proc_macro]
 pub fn eval(input_raw: proc_macro::TokenStream) -> proc_macro::TokenStream {
-    let (input, dependencies) = extract_dependencies(input_raw.into());
-    let cargo_config = CargoConfig::new(dependencies);
+    let mut cfg = ProjectConfig::default();
+    let input = extract_dependencies(&mut cfg, input_raw.into());
 
     let input_str = expand_output_macro(input).to_string();
+    let input_str_esc: String = input_str.chars().flat_map(|c| c.escape_default()).collect();
     if DEBUG { println!("REWRITTEN INPUT: {input_str}"); }
 
     let out_dir = get_output_dir();
@@ -389,8 +437,13 @@ pub fn eval(input_raw: proc_macro::TokenStream) -> proc_macro::TokenStream {
             .expect("Failed to create project directory.");
     }
 
+    let attrs = cfg.lib.print();
     let main_content = format!(
-        "{PRELUDE}
+        "{attrs}
+        {PRELUDE}
+
+        const SOURCE_CODE: &str = \"{input_str_esc}\";
+
         fn main() {{
             let mut output_buffer = String::new();
             {input_str}
@@ -398,7 +451,7 @@ pub fn eval(input_raw: proc_macro::TokenStream) -> proc_macro::TokenStream {
         }}",
     );
 
-    create_project_skeleton(&project_dir, cargo_config, &main_content);
+    create_project_skeleton(&project_dir, cfg, &main_content);
     let output = run_cargo_project(&project_dir);
     fs::remove_dir_all(&project_dir).ok();
     let out: TokenStream = output.parse().expect("Failed to parse generated code.");
