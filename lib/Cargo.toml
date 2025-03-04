@@ -1,0 +1,14 @@
+[package]
+name = "eval-macro"
+version = "0.1.0"
+authors = ["Wojciech Danilo <wojciech.danilo@gmail.com>"]
+edition = { workspace = true }
+
+[dependencies]
+eval-macro-internal = { path = "../macro" }
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[lints]
+workspace = true

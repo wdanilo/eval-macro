@@ -1,0 +1,16 @@
+[package]
+name = "eval-macro-internal"
+version = "0.1.0"
+authors = ["Wojciech Danilo <wojciech.danilo@gmail.com>"]
+edition = { workspace = true }
+
+[dependencies]
+proc-macro2 = { version = "1", features = ["span-locations"] }
+quote = "1"
+syn = { version = "2", features = ["full"] }
+
+[lib]
+proc-macro = true
+
+[lints]
+workspace = true

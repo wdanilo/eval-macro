@@ -1,0 +1,62 @@
+[workspace]
+package.edition = "2024"
+resolver = "3"
+members = [
+    "lib",
+    "macro",
+]
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+overflow-checks = false
+
+[workspace.lints.clippy]
+assigning_clones = "warn"
+checked_conversions = "warn"
+cloned_instead_of_copied = "warn"
+cognitive_complexity = "warn"
+dbg_macro = "warn"
+doc_markdown = "warn"
+expect_used = "warn"
+explicit_iter_loop = "warn"
+filter_map_next = "warn"
+if_then_some_else_none = "warn"
+index_refutable_slice = "warn"
+large_futures = "warn"
+large_stack_frames = "warn"
+large_types_passed_by_value = "warn"
+manual_let_else = "warn"
+map_unwrap_or = "warn"
+needless_pass_by_ref_mut = "warn"
+nonstandard_macro_braces = "warn"
+option_option = "warn"
+panic = "warn"
+pub_underscore_fields = "warn"
+rc_buffer = "warn"
+rc_mutex = "warn"
+renamed_function_params = "warn"
+semicolon_outside_block = "warn"
+trivially_copy_pass_by_ref = "warn"
+tuple_array_conversions = "warn"
+unchecked_duration_subtraction = "warn"
+uninlined_format_args = "warn"
+unnecessary_box_returns = "warn"
+unnecessary_safety_doc = "warn"
+unnecessary_wraps = "warn"
+unnested_or_patterns = "warn"
+unreadable_literal = "warn"
+unused_self = "warn"
+unwrap_used = "warn"
+#use_self = "warn"
+#absolute_paths = "warn"
+#too_many_lines = "warn"
+#undocumented_unsafe_blocks = "warn"
+#print_stdout = "warn"
+#missing_const_for_fn = "warn"
+#module_name_repetitions = "warn"
+#multiple_crate_versions = "warn"
+#indexing_slicing = "warn"
+#allow_attributes = "warn" // false positives
