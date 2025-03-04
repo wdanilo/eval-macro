@@ -214,6 +214,28 @@
 //! <br/>
 //! <br/>
 //!
+//! # 📚 Dependencies
+//!
+//! Each `eval!` block can define **its own Cargo dependencies**, allowing you to pull in external
+//! crates directly within the macro context. This is done using a special **pragma attribute**:
+//! `#![dependency(...)]`.
+//!
+//! ```
+//! use eval_macro::eval;
+//!
+//! eval! {
+//!     #![dependency(anyhow = "1.0")]
+//!     type Result<T> = anyhow::Result<T>;
+//!     // ...
+//! }
+//! # fn main() {}
+//! ```
+//! This flexibility allows `eval!` macros to seamlessly leverage third-party crates, without
+//! affecting your project's main `Cargo.toml`.
+//!
+//! <br/>
+//! <br/>
+//!
 //! # ⚠️ Troubleshooting
 //!
 //! ⚠️ **Note:** Rust IDEs differ in how they handle macro expansion. This macro is tuned for
