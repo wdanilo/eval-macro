@@ -531,3 +531,97 @@ pub fn eval(input_raw: proc_macro::TokenStream) -> proc_macro::TokenStream {
     }
     out.into()
 }
+
+#[proc_macro_attribute]
+pub fn eval2(_attr: proc_macro::TokenStream, item: proc_macro::TokenStream) -> proc_macro::TokenStream {
+    let mut cfg = ProjectConfig::default();
+    let input_fn = syn::parse_macro_input!(item as syn::ItemFn);
+    let name = &input_fn.sig.ident.to_string();
+    let args = &input_fn.sig.inputs;
+    let body = &input_fn.block.stmts;
+    let attrs = &input_fn.attrs;
+    let wrong_args = "Function should have at most one argument of the form of `pattern!(<pattern>):_`, where <pattern> is a `macro_rules!` pattern.";
+    if args.len() > 1 {
+        panic!("{}", wrong_args);
+    }
+    let pattern = args.iter().next().map(|t| {
+        if let syn::FnArg::Typed(pat) = t {
+            if let syn::Pat::Macro(m) = &*pat.pat {
+                let tokens = &m.mac.tokens;
+                let str = tokens.to_string();
+                str
+            } else {
+                panic!("{}", wrong_args);
+            }
+        } else {
+            panic!("{}", wrong_args);
+        }
+    }).unwrap_or_else(|| String::new());
+
+    let body_tokens = quote! { #(#body)* };
+    let input_str = expand_output_macro(body_tokens).to_string();
+    let input_str_esc: String = input_str.chars().flat_map(|c| c.escape_default()).collect();
+    if DEBUG { println!("REWRITTEN INPUT: {input_str}"); }
+
+    let out_dir = get_output_dir();
+    let project_name = project_name_from_input(&input_str);
+    let project_dir = out_dir.join(&project_name);
+
+    if !project_dir.exists() {
+        fs::create_dir_all(&project_dir)
+            .expect("Failed to create project directory.");
+    }
+
+    let attrs = cfg.lib.print();
+    let main_content = format!(
+        "{attrs}
+        {PRELUDE}
+
+        const SOURCE_CODE: &str = \"{input_str_esc}\";
+
+        fn main() {{
+            let mut output_buffer = String::new();
+            let result = {{
+                {input_str}
+            }};
+            push_as_str(&mut output_buffer, &result);
+            println!(\"{{}}\", prefix_lines_with_output(&output_buffer));
+        }}",
+    );
+
+    create_project_skeleton(&project_dir, cfg, &main_content);
+    let output = run_cargo_project(&project_dir);
+    fs::remove_dir_all(&project_dir).ok();
+    let mut code = String::new();
+    for line in output.split('\n') {
+        let line_trimmed = line.trim();
+        if line_trimmed.starts_with(OUTPUT_PREFIX) {
+            code.push_str(&line_trimmed[OUTPUT_PREFIX.len()..]);
+            code.push('\n');
+        } else if line_trimmed.starts_with(WARNING_PREFIX) {
+            println!("[WARNING] {}", &line_trimmed[WARNING_PREFIX.len()..]);
+        } else if line_trimmed.starts_with(ERROR_PREFIX) {
+            println!("[ERROR] {}", &line_trimmed[ERROR_PREFIX.len()..]);
+        } else if line_trimmed.len() > 0 {
+            println!("{line}");
+        }
+    }
+
+    let code_out: TokenStream = code.parse().expect("Failed to parse generated code.");
+    let macro_code = format!("
+        macro_rules! {name} {{
+            ({pattern}) => {{
+               {code}
+            }}
+        }}
+    ");
+
+
+    // if DEBUG {
+        println!("BODY: {macro_code}");
+    // }
+
+    let out: TokenStream = macro_code.parse().expect("Failed to parse generated code.");
+    println!("OUTPUT : {out}");
+    out.into()
+}
