@@ -474,7 +474,6 @@ fn print_internal(tokens: &TokenStream) -> PrintOutput {
 
 #[proc_macro]
 pub fn eval(input_raw: proc_macro::TokenStream) -> proc_macro::TokenStream {
-    let input_raw_cloned: TokenStream  = input_raw.clone().into();
     let mut cfg = ProjectConfig::default();
     let input = extract_dependencies(&mut cfg, input_raw.into());
 
@@ -530,14 +529,5 @@ pub fn eval(input_raw: proc_macro::TokenStream) -> proc_macro::TokenStream {
     if DEBUG {
         println!("OUT: {out}");
     }
-
-    quote! {
-        const _: () =  {
-            fn func() {
-                #input_raw_cloned
-            }
-        };
-        #out
-    }
-    .into()
+    out.into()
 }
