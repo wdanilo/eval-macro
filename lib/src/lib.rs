@@ -1,4 +1,4 @@
-//! <img width="680" alt="banner" src="https://github.com/user-attachments/assets/54ae67e5-7178-48e0-bffc-7115b2fd0e91">
+//! <img width="680" alt="banner" src="https://github.com/user-attachments/assets/e7dab624-6e88-41f6-b681-a7a430f96b50">
 //!
 //! <br/>
 //! <br/>
@@ -134,6 +134,16 @@
 //! ```
 //!
 //! Doing this with `macro_rules!` or procedural macros would be far more complex!
+//!
+//! Also, please note that you can use the `eval!` macro to perform complex type-level
+//! calculations:
+//!
+//! ```
+//! use eval_macro::eval;
+//!
+//! const MY_NUM: usize = eval! { (std::f32::consts::PI.sqrt() * 10.0).round() as usize };
+//! # fn main() {}
+//! ```
 //!
 //! <br/>
 //! <br/>
@@ -306,9 +316,13 @@
 //!
 //! fn main() {
 //!     let mut output_buffer = String::new();
-//!     // Your code.
+//!     let result = {{
+//!         // Your code.
+//!     }};
+//!     push_as_str(&mut output_buffer, &result);
 //!     println!("{}", prefix_lines_with_output(&output_buffer));
 //! }
+//! # fn push_as_str(str: &mut String, result: &()) {}
 //! # fn prefix_lines_with_output(input: &str) -> String { String::new() }
 //! ```
 //!

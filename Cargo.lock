@@ -4,14 +4,14 @@ version = 4
 
 [[package]]
 name = "eval-macro"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "eval-macro-internal",
 ]
 
 [[package]]
 name = "eval-macro-internal"
-version = "0.1.0"
+version = "0.5.0"
 dependencies = [
  "proc-macro2",
  "quote",

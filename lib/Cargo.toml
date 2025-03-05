@@ -1,6 +1,6 @@
 [package]
 name = "eval-macro"
-version = "0.4.0"
+version = "0.5.0"
 authors = ["Wojciech Danilo <wojciech.danilo@gmail.com>"]
 description = "A powerful yet easy-to-use Rust macro that generates code by evaluating inline Rust logic at compile time."
 keywords = ["macro", "macro_rules", "procedural", "eval", "inline"]
@@ -11,7 +11,7 @@ edition = { workspace = true }
 [lib]
 
 [dependencies]
-eval-macro-internal = { version = "0.1.0", path = "../macro" }
+eval-macro-internal = { version = "0.5.0", path = "../macro" }
 
 [lints]
 workspace = true

@@ -108,6 +108,17 @@ const PRELUDE: &str = "
         generate(n, vec![], &mut result);
         result
     }
+
+    fn push_as_str<T: std::fmt::Debug>(str: &mut String, value: &T) {
+        let repr = format!(\"{value:?}\");
+        if repr != \"()\" {
+            if repr.starts_with(\"(\") && repr.ends_with(\")\") {
+                str.push_str(&repr[1..repr.len() - 1]);
+            } else {
+                str.push_str(&repr);
+            }
+        }
+    }
 ";
 
 // ============
@@ -488,7 +499,10 @@ pub fn eval(input_raw: proc_macro::TokenStream) -> proc_macro::TokenStream {
 
         fn main() {{
             let mut output_buffer = String::new();
-            {input_str}
+            let result = {{
+                {input_str}
+            }};
+            push_as_str(&mut output_buffer, &result);
             println!(\"{{}}\", prefix_lines_with_output(&output_buffer));
         }}",
     );
