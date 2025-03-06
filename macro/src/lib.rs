@@ -159,16 +159,6 @@ fn find_cargo_toml(mut start_path: PathBuf) -> Option<PathBuf> {
 
 
 
-// fn get_build_dependencies(cargo_toml_path: &PathBuf) -> Result<Vec<String>, Box<dyn std::error::Error>> {
-//     let cargo_toml_content = fs::read_to_string(cargo_toml_path)?;
-//     let parsed: toml::Value = toml::from_str(&cargo_toml_content)?;
-//     let build_dependencies = parsed
-//         .get("build-dependencies")
-//         .and_then(|v| v.as_table())
-//         .map(|table| table.keys().cloned().collect())
-//         .unwrap_or_else(Vec::new);
-//     Ok(build_dependencies)
-// }
 
 #[derive(Debug)]
 struct Paths {
@@ -570,58 +560,6 @@ fn print_internal(tokens: &TokenStream) -> PrintOutput {
 // === Eval Macro ===
 // ==================
 
-#[proc_macro]
-pub fn eval(input_raw: proc_macro::TokenStream) -> proc_macro::TokenStream {
-    let mut cfg = CargoConfig::default();
-    let input = extract_dependencies(&mut cfg, input_raw.into());
-
-    let input_str = expand_output_macro(input).to_string();
-    let input_str_esc: String = input_str.chars().flat_map(|c| c.escape_default()).collect();
-    if DEBUG { println!("REWRITTEN INPUT: {input_str}"); }
-
-
-    let main_content = format!(
-        "{PRELUDE}
-
-        const SOURCE_CODE: &str = \"{input_str_esc}\";
-
-        fn main() {{
-            let mut output_buffer = String::new();
-            let result = {{
-                {input_str}
-            }};
-            push_as_str(&mut output_buffer, &result);
-            println!(\"{{}}\", prefix_lines_with_output(&output_buffer));
-        }}",
-    );
-
-    let paths = Paths::new("foo", &input_str);
-    let output = paths.with_output_dir(|output_dir| {
-        create_project_skeleton(&output_dir, cfg, &main_content);
-        run_cargo_project(&output_dir)
-    });
-    let mut code = String::new();
-    for line in output.split('\n') {
-        let line_trimmed = line.trim();
-        if line_trimmed.starts_with(OUTPUT_PREFIX) {
-            code.push_str(&line_trimmed[OUTPUT_PREFIX.len()..]);
-            code.push('\n');
-        } else if line_trimmed.starts_with(WARNING_PREFIX) {
-            println!("[WARNING] {}", &line_trimmed[WARNING_PREFIX.len()..]);
-        } else if line_trimmed.starts_with(ERROR_PREFIX) {
-            println!("[ERROR] {}", &line_trimmed[ERROR_PREFIX.len()..]);
-        } else if line_trimmed.len() > 0 {
-            println!("{line}");
-        }
-    }
-
-    let out: TokenStream = code.parse().expect("Failed to parse generated code.");
-    if DEBUG {
-        println!("OUT: {out}");
-    }
-    out.into()
-}
-
 fn extract_attrs(cfg: &mut CargoConfig, attrs: Vec<syn::Attribute>) -> Vec<String> {
     let mut remaining = Vec::with_capacity(attrs.len());
     for attr in attrs {
@@ -653,7 +591,7 @@ fn extract_attrs(cfg: &mut CargoConfig, attrs: Vec<syn::Attribute>) -> Vec<Strin
 fn extract_pattern(
     args: &syn::punctuated::Punctuated<syn::FnArg, syn::token::Comma>
 ) -> Option<String> {
-    let arg = args.first()?;
+    let Some(arg) = args.first() else { return Some(String::new()) };
     let syn::FnArg::Typed(pat) = arg else { return None };
     let syn::Pat::Macro(m) = &*pat.pat else { return None };
     Some(m.mac.tokens.to_string())
@@ -665,7 +603,7 @@ const WRONG_ARGS: &str = "Function should have at most one argument of the form 
 
 
 #[proc_macro_attribute]
-pub fn eval2(_attr: proc_macro::TokenStream, item: proc_macro::TokenStream) -> proc_macro::TokenStream {
+pub fn eval(_attr: proc_macro::TokenStream, item: proc_macro::TokenStream) -> proc_macro::TokenStream {
     let input_fn = syn::parse_macro_input!(item as syn::ItemFn);
     let name = &input_fn.sig.ident.to_string();
     let args = &input_fn.sig.inputs;
