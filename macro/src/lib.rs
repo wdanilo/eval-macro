@@ -20,20 +20,23 @@ use std::path::PathBuf;
 use std::process::Command;
 use quote::ToTokens;
 
-include!(concat!(env!("OUT_DIR"), "/build_constants.rs"));
 
 // =================
 // === Constants ===
 // =================
+
+const OUT_DIR: &str = env!("OUT_DIR");
 
 /// Set to 'true' to enable debug prints.
 const DEBUG: bool = false;
 
 const THIS_CRATE_NAME: &str = "eval_macro";
 
-const OUTPUT_PREFIX: &str = "OUTPUT:";
-const WARNING_PREFIX: &str = "WARNING:";
-const ERROR_PREFIX: &str = "ERROR:";
+mod prefix {
+    pub const OUTPUT: &str = "OUTPUT:";
+    pub const WARNING: &str = "WARNING:";
+    pub const ERROR: &str = "ERROR:";
+}
 
 /// Rust keywords for special handling. This is not needed for this macro to work, it is only used
 /// to make `IntelliJ` / `RustRover` work correctly, as their `TokenStream` spans are incorrect.
@@ -127,12 +130,36 @@ const PRELUDE: &str = "
     }
 ";
 
-// =============
-// === Utils ===
-// =============
+// ===============
+// === Logging ===
+// ===============
 
-macro_rules! dbg {
-    ($($ts:tt)*) => { if DEBUG { println!($($ts)*); } };
+macro_rules! dbg     { ($($ts:tt)*) => { if DEBUG      {println!( $($ts)* )}  }; }
+macro_rules! warning { ($($ts:tt)*) => { print_warning (&format!( $($ts)* )); }; }
+macro_rules! error   { ($($ts:tt)*) => { print_error   (&format!( $($ts)* )); }; }
+
+#[cfg(nightly)]
+fn print_warning(message: &str) {
+    let span = proc_macro::Span::call_site();
+    let level = proc_macro::Level::Warning;
+    proc_macro::Diagnostic::spanned(span, level, message).emit();
+}
+
+#[cfg(nightly)]
+fn print_error(message: &str) {
+    let span = proc_macro::Span::call_site();
+    let level = proc_macro::Level::Error;
+    proc_macro::Diagnostic::spanned(span, level, message).emit();
+}
+
+#[cfg(not(nightly))]
+fn print_warning(message: &str) {
+    println!("[WARNING] {}", message);
+}
+
+#[cfg(not(nightly))]
+fn print_error(message: &str) {
+    println!("[ERROR] {}", message);
 }
 
 // ============
@@ -266,6 +293,35 @@ impl CargoConfig {
         self.edition = Some(edition.to_string());
         Ok(())
     }
+
+    fn extract_attributes(&mut self, attributes: Vec<syn::Attribute>) -> String {
+        let mut other_attributes = Vec::with_capacity(attributes.len());
+        for attr in attributes {
+            let tokens = attr.parse_args::<TokenStream>().unwrap_or_else(|err|
+                panic!("Failed to parse attributes: {}", err)
+            );
+            let tokens_str = tokens.to_string().replace(" ", "");
+            if attr.path().is_ident("dependency") {
+                self.dependencies.push(tokens_str);
+            } else if attr.path().is_ident("edition") {
+                if self.edition.is_some() {
+                    panic!("Edition already set.");
+                }
+                self.edition = Some(tokens_str);
+            } else {
+                other_attributes.push(attr.to_token_stream().to_string());
+            }
+        }
+        #[cfg(nightly)]
+        if !self.dependencies.is_empty() {
+            let span = proc_macro::Span::call_site();
+            let level = proc_macro::Level::Warning;
+            let message = "On nightly Rust channel you should not define dependencies here. Use `#[build_dependencies]` in your Cargo.toml instead.";
+            proc_macro::Diagnostic::spanned(span, level, message).emit();
+        }
+        other_attributes.join("\n")
+    }
+
 }
 
 fn project_name_from_input(input_str: &str) -> String {
@@ -421,7 +477,7 @@ fn expand_output_macro(input: TokenStream) -> TokenStream {
                             let inner_rewritten = expand_output_macro(group.stream());
                             let content_str = print(&inner_rewritten);
                             let lit = syn::LitStr::new(&content_str, proc_macro2::Span::call_site());
-                            let new_tokens = quote! { write_ln!(output_buffer, #lit); };
+                            let new_tokens = quote! { write_ln!(__output_buffer__, #lit); };
                             output.extend(new_tokens);
                             i += 3;
                             continue;
@@ -560,33 +616,6 @@ fn print_internal(tokens: &TokenStream) -> PrintOutput {
 // === Eval Macro ===
 // ==================
 
-fn extract_attrs(cfg: &mut CargoConfig, attrs: Vec<syn::Attribute>) -> Vec<String> {
-    let mut remaining = Vec::with_capacity(attrs.len());
-    for attr in attrs {
-        let tokens = attr.parse_args::<TokenStream>().unwrap_or_else(|err|
-            panic!("Failed to parse attribute tokens: {}", err)
-        );
-        let tokens_str = tokens.to_string().replace(" ", "");
-        if attr.path().is_ident("dependency") {
-            cfg.dependencies.push(tokens_str);
-        } else if attr.path().is_ident("edition") {
-            if cfg.edition.is_some() {
-                panic!("Edition already set.");
-            }
-            cfg.edition = Some(tokens_str);
-        } else {
-            remaining.push(attr.to_token_stream().to_string());
-        }
-    }
-    #[cfg(nightly)]
-    if !cfg.dependencies.is_empty() {
-        let span = proc_macro::Span::call_site();
-        let level = proc_macro::Level::Warning;
-        let message = "On nightly Rust channel you should not define dependencies here. Use `#[build_dependencies]` in your Cargo.toml instead.";
-        proc_macro::Diagnostic::spanned(span, level, message).emit();
-    }
-    remaining
-}
 
 fn extract_pattern(
     args: &syn::punctuated::Punctuated<syn::FnArg, syn::token::Comma>
@@ -601,6 +630,42 @@ const WRONG_ARGS: &str = "Function should have at most one argument of the form 
     `pattern!(<pattern>):_`, where <pattern> is a `macro_rules!` pattern.";
 
 
+fn prepare_input_code(attributes:&str, body: &str) -> String {
+    let body_esc: String = body.chars().flat_map(|c| c.escape_default()).collect();
+    format!(
+        "{attributes}
+        {PRELUDE}
+
+        const SOURCE_CODE: &str = \"{body_esc}\";
+
+        fn main() {{
+            let mut __output_buffer__ = String::new();
+            let result = {{
+                {body}
+            }};
+            push_as_str(&mut __output_buffer__, &result);
+            println!(\"{{}}\", prefix_lines_with_output(&__output_buffer__));
+        }}",
+    )
+}
+
+fn parse_output(output: &str) -> String {
+    let mut code = String::new();
+    for line in output.split('\n') {
+        let line_trimmed = line.trim();
+        if line_trimmed.starts_with(prefix::OUTPUT) {
+            code.push_str(&line_trimmed[prefix::OUTPUT.len()..]);
+            code.push('\n');
+        } else if line_trimmed.starts_with(prefix::WARNING) {
+            warning!("{}", &line_trimmed[prefix::WARNING.len()..]);
+        } else if line_trimmed.starts_with(prefix::ERROR) {
+            error!("{}", &line_trimmed[prefix::ERROR.len()..]);
+        } else if line_trimmed.len() > 0 {
+            println!("{line}");
+        }
+    }
+    code
+}
 
 #[proc_macro_attribute]
 pub fn eval(_attr: proc_macro::TokenStream, item: proc_macro::TokenStream) -> proc_macro::TokenStream {
@@ -612,10 +677,9 @@ pub fn eval(_attr: proc_macro::TokenStream, item: proc_macro::TokenStream) -> pr
     if args.len() > 1 { panic!("{}", WRONG_ARGS); }
 
     let mut cfg = CargoConfig::default();
-    let other_atts = extract_attrs(&mut cfg, input_fn.attrs).join("\n");
+    let attributes = cfg.extract_attributes(input_fn.attrs);
     let input_pattern = extract_pattern(&args).unwrap_or_else(|| panic!("{}", WRONG_ARGS));
     let input_str = expand_output_macro(quote!{ #(#body)* }).to_string();
-    let input_str_esc: String = input_str.chars().flat_map(|c| c.escape_default()).collect();
     let paths = Paths::new(name, &input_str);
 
     if let Some(path) = &paths.cargo_toml_path {
@@ -624,43 +688,14 @@ pub fn eval(_attr: proc_macro::TokenStream, item: proc_macro::TokenStream) -> pr
 
     dbg!("REWRITTEN INPUT: {input_str}");
 
-    let input_code = format!(
-        "{other_atts}
-        {PRELUDE}
-
-        const SOURCE_CODE: &str = \"{input_str_esc}\";
-
-        fn main() {{
-            let mut output_buffer = String::new();
-            let result = {{
-                {input_str}
-            }};
-            push_as_str(&mut output_buffer, &result);
-            println!(\"{{}}\", prefix_lines_with_output(&output_buffer));
-        }}",
-    );
-
+    let input_code = prepare_input_code(&attributes, &input_str);
     let output = paths.with_output_dir(|output_dir| {
         dbg!("OUTPUT_DIR: {:?}", output_dir);
         create_project_skeleton(&output_dir, cfg, &input_code);
         run_cargo_project(&output_dir)
     });
 
-    let mut output_code = String::new();
-    for line in output.split('\n') {
-        let line_trimmed = line.trim();
-        if line_trimmed.starts_with(OUTPUT_PREFIX) {
-            output_code.push_str(&line_trimmed[OUTPUT_PREFIX.len()..]);
-            output_code.push('\n');
-        } else if line_trimmed.starts_with(WARNING_PREFIX) {
-            println!("[WARNING] {}", &line_trimmed[WARNING_PREFIX.len()..]);
-        } else if line_trimmed.starts_with(ERROR_PREFIX) {
-            println!("[ERROR] {}", &line_trimmed[ERROR_PREFIX.len()..]);
-        } else if line_trimmed.len() > 0 {
-            println!("{line}");
-        }
-    }
-
+    let output_code = parse_output(&output);
     let macro_code = format!("
         macro_rules! {name} {{
             ({input_pattern}) => {{
@@ -675,3 +710,6 @@ pub fn eval(_attr: proc_macro::TokenStream, item: proc_macro::TokenStream) -> pr
     dbg!("OUTPUT : {out}");
     out.into()
 }
+
+// TODO: get lints from Cargo
+// TODO: support workspaces, for edition and dependencies
