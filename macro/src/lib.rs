@@ -1,10 +1,9 @@
-#![allow(clippy::panic)]
-#![allow(clippy::expect_used)]
-
 #![cfg_attr(nightly, feature(proc_macro_span))]
 #![feature(proc_macro_diagnostic)]
 
+use anyhow::Context;
 use anyhow::Error;
+use anyhow::anyhow;
 use proc_macro2::Delimiter;
 use proc_macro2::LineColumn;
 use proc_macro2::Span;
@@ -32,14 +31,13 @@ use non_nightly_deps::*;
 // === Constants ===
 // =================
 
-const OUT_DIR: &str = env!("OUT_DIR");
-
 /// Set to 'true' to enable debug prints.
 const DEBUG: bool = false;
 
 const CRATE: &str = "crabtime";
+const DEFAULT_EDITION: &str = "2024";
+const DEFAULT_RESOLVER: &str = "3";
 const GEN_MOD: &str = CRATE;
-
 const OUTPUT_PREFIX: &str = "[OUTPUT]";
 
 /// Rust keywords for special handling. This is not needed for this macro to work, it is only used
@@ -51,6 +49,8 @@ const KEYWORDS: &[&str] = &[
     "type", "unsafe", "use", "where", "while", "abstract", "become", "box", "do", "final", "macro",
     "override", "priv", "typeof", "unsized", "virtual", "yield", "try",
 ];
+
+const OUT_DIR: &str = env!("OUT_DIR");
 
 // ==============
 // === Errors ===
@@ -244,53 +244,57 @@ const PRELUDE_MAGIC: &str = "
 #[derive(Debug)]
 struct Paths {
     output_dir: PathBuf,
-    /// Unknown if we are on stable.
-    cargo_toml_path: Option<PathBuf>,
+    /// None if we are on stable.
+    cargo_toml_path: Option<CargoConfigPaths>,
+}
+
+fn parent_dir(path: &Path) -> Result<&Path> {
+    path.parent().with_context(|| format!("Path '{}' does not have a parent.", path.display()))
+}
+
+fn find_parent_dir<'t>(path: &'t Path, dir_name: &str) -> Result<&'t Path> {
+    let dir_name_os = std::ffi::OsStr::new(dir_name);
+    path.ancestors()
+        .find(|p| p.file_name() == Some(dir_name_os))
+        .with_context(|| format!(
+            "Path '{}' does not have parent '{dir_name}' directory.",
+            path.display()
+        ))
 }
 
 impl Paths {
     #[cfg(nightly)]
-    fn new(macro_name: &str, _input_str: &str) -> Self {
+    fn new(macro_name: &str, _input_str: &str) -> Result<Self> {
         let mut call_site_path = proc_macro::Span::call_site().source_file().path();
         call_site_path.set_extension("");
-        let crate_out_dir_str = OUT_DIR;
-        let crate_out_dir = Path::new(&crate_out_dir_str);
-
-        let target_dir_name = std::ffi::OsStr::new("target");
-        let target_dir = crate_out_dir.ancestors().find(|p| p.file_name() == Some(target_dir_name)).unwrap();
-        let workspace_dir = target_dir.parent().unwrap();
-        let file_path = workspace_dir.join(&call_site_path);
-        let cargo_toml_path = find_cargo_configs(file_path).into_iter().next().unwrap();
-
-        let build_dir_name = std::ffi::OsStr::new("build");
-        let build_dir = crate_out_dir.ancestors().find(|p| p.file_name() == Some(build_dir_name)).unwrap();
+        let crate_out_str = OUT_DIR;
+        let crate_out = Path::new(&crate_out_str);
+        let target = find_parent_dir(crate_out, "target")?;
+        let workspace = parent_dir(target)?;
+        let file_path = workspace.join(&call_site_path);
+        let cargo_toml_path = Some(find_cargo_configs(&file_path)?);
+        let build_dir = find_parent_dir(crate_out, "build")?;
         let output_dir = build_dir.join(CRATE).join(call_site_path).join(macro_name);
-
-        Self {
-            output_dir,
-            cargo_toml_path: Some(cargo_toml_path),
-        }
+        Ok(Self { output_dir, cargo_toml_path })
     }
 
     #[cfg(not(nightly))]
-    fn new(_macro_name: &str, input_str: &str) -> Self {
-        let home_dir = std::env::var("HOME").unwrap();
+    fn new(_macro_name: &str, input_str: &str) -> Result<Self> {
+        let home_dir = std::env::var("HOME").context("$HOME not set")?;
         let eval_macro_dir = PathBuf::from(home_dir).join(".cargo").join(CRATE);
         let project_name = project_name_from_input(input_str);
         let output_dir = eval_macro_dir.join(&project_name);
-        Self {
-            output_dir,
-            cargo_toml_path: None,
-        }
+        let cargo_toml_path = None;
+        Ok(Self { output_dir, cargo_toml_path: None })
     }
 
-    fn with_output_dir<T>(&self, f: impl FnOnce(&PathBuf) -> T) -> T {
+    fn with_output_dir<T>(&self, f: impl FnOnce(&PathBuf) -> Result<T>) -> Result<T> {
         if !self.output_dir.exists() {
             fs::create_dir_all(&self.output_dir)
-                .expect("Failed to create project directory.");
+                .context("Failed to create project directory.")?;
         }
         let out = f(&self.output_dir);
-        // We cache projects on nightly. On stable, the project name is based on the input string.
+        // We cache projects on nightly. On stable, the project name is based on the input code.
         #[cfg(not(nightly))]
         fs::remove_dir_all(&self.output_dir).ok();
         out
@@ -304,15 +308,37 @@ fn project_name_from_input(input_str: &str) -> String {
     format!("project_{:016x}", hasher.finish())
 }
 
-/// Traverse up the directory tree from `path` until all `Cargo.toml` files are found.
-fn find_cargo_configs(mut path: PathBuf) -> Vec<PathBuf> {
+// ========================
+// === CargoConfigPaths ===
+// ========================
+
+#[derive(Debug)]
+struct CargoConfigPaths {
+    crate_config: PathBuf,
+    workspace_config: Option<PathBuf>,
+}
+
+fn find_cargo_configs(path: &PathBuf) -> Result<CargoConfigPaths> {
+    let mut current_path = path.clone();
     let mut out = Vec::new();
     loop {
-        let candidate = path.join("Cargo.toml");
+        let candidate = current_path.join("Cargo.toml");
         if candidate.is_file() { out.push(candidate) }
-        if !path.pop() { break }
+        if !current_path.pop() { break }
     }
-    out
+    if out.len() >= 2 {
+        Ok(CargoConfigPaths {
+            crate_config: out[0].clone(),
+            workspace_config: Some(out[1].clone()),
+        })
+    } else if out.len() >= 1 {
+        Ok(CargoConfigPaths {
+            crate_config: out[0].clone(),
+            workspace_config: None,
+        })
+    } else {
+        Err(anyhow!("No 'Cargo.toml' files found in parent directories of '{}'.", path.display()))
+    }
 }
 
 // ===================
@@ -332,7 +358,7 @@ impl Dependency {
 
     #[cfg(nightly)]
     fn span(&self) -> Span {
-        self.token_range.as_ref().map_or(Span::call_site(), |range| range.span())
+        self.token_range.as_ref().map_or(Span::call_site(), |t| t.span())
     }
 }
 
@@ -345,9 +371,12 @@ struct CargoConfig {
 
 impl CargoConfig {
     fn print(&self) -> String {
-        let edition = self.edition.as_ref().map_or("2024", |t| t.as_str());
-        let resolver = self.resolver.as_ref().map_or("3", |t| t.as_str());
-        let dependencies = self.dependencies.iter().map(|t| t.tokens_str.clone()).collect::<Vec<_>>().join("\n");
+        let edition = self.edition.as_ref().map_or(DEFAULT_EDITION, |t| t.as_str());
+        let resolver = self.resolver.as_ref().map_or(DEFAULT_RESOLVER, |t| t.as_str());
+        let dependencies = self.dependencies.iter()
+            .map(|t| t.tokens_str.clone())
+            .collect::<Vec<_>>()
+            .join("\n");
         format!("
             [workspace]
             [package]
@@ -361,17 +390,13 @@ impl CargoConfig {
         ")
     }
 
-    fn fill_from_cargo_toml(&mut self, cargo_toml_path: &PathBuf) -> Result<(), Box<dyn std::error::Error>> {
-        let cargo_toml_content = fs::read_to_string(cargo_toml_path)?;
+    fn fill_from_cargo_toml(&mut self, cargo_config_paths: &CargoConfigPaths) -> Result {
+        let cargo_toml_content = fs::read_to_string(&cargo_config_paths.crate_config)?;
         let parsed: toml::Value = toml::from_str(&cargo_toml_content)?;
         let dependencies = parsed
             .get("build-dependencies")
             .and_then(|v| v.as_table())
-            .map_or(Vec::new(), |table|
-                table.iter().map(|(k, v)|
-                    format!("{k} = {v}")
-                ).collect()
-            );
+            .map_or(vec![], |t| t.iter().map(|(k, v)| format!("{k} = {v}")).collect());
         let edition = parsed
             .get("package")
             .and_then(|v| v.as_table())
@@ -383,23 +408,18 @@ impl CargoConfig {
         Ok(())
     }
 
-    fn extract_inline_attributes(&mut self, attributes: Vec<syn::Attribute>) -> String {
+    fn extract_inline_attributes(&mut self, attributes: Vec<syn::Attribute>) -> Result<String> {
         let mut other_attributes = Vec::with_capacity(attributes.len());
         let mut new_dependencies = vec![];
         for attr in attributes {
-            let tokens = attr.parse_args::<TokenStream>().unwrap_or_else(|err|
-                panic!("Failed to parse attributes: {}", err)
-            );
+            let tokens = attr.parse_args::<TokenStream>().context("Failed to parse attributes")?;
             let tokens_str = tokens.to_string().replace(" ", "");
-            let first_token = tokens.clone().into_iter().next().unwrap();
-            let last_token = tokens.clone().into_iter().last().unwrap();
-            let token_range = Some(TokenRange::new(first_token, last_token));
+            let token_range = tokens.clone().into_iter().next()
+                .zip(tokens.clone().into_iter().last())
+                .map(|(first, last)| TokenRange::new(first, last));
             if attr.path().is_ident("dependency") {
                 new_dependencies.push(Dependency::new(tokens_str, token_range));
             } else if attr.path().is_ident("edition") {
-                if self.edition.is_some() {
-                    panic!("Edition already set.");
-                }
                 self.edition = Some(tokens_str);
             } else {
                 other_attributes.push(attr.to_token_stream().to_string());
@@ -407,66 +427,68 @@ impl CargoConfig {
         }
         #[cfg(nightly)]
         for dependency in &new_dependencies {
+            // SAFETY: This unwrap is safe in proc macros.
             let span = dependency.span().unwrap();
             let level = proc_macro::Level::Warning;
-            let message = "On nightly Rust channel you should not define dependencies here. Use `#[build_dependencies]` in your Cargo.toml instead.";
+            let message =
+                "When using the nightly Rust channel, dependencies should be specified in the \
+                [build-dependencies] section of your Cargo.toml file.";
             proc_macro::Diagnostic::spanned(span, level, message).emit();
         }
         self.dependencies.extend(new_dependencies);
-        other_attributes.join("\n")
+        Ok(other_attributes.join("\n"))
     }
-
 }
 
-fn create_project_skeleton(project_dir: &Path, cfg: CargoConfig, main_content: &str) {
+fn create_project_skeleton(project_dir: &Path, cfg: CargoConfig, main_content: &str) -> Result {
     let src_dir = project_dir.join("src");
     if !src_dir.exists() {
-        fs::create_dir_all(&src_dir).expect("Failed to create src directory.");
+        fs::create_dir_all(&src_dir).context("Failed to create src directory.")?;
     }
 
     let cargo_toml = project_dir.join("Cargo.toml");
     let cargo_toml_content = cfg.print();
-    fs::write(&cargo_toml, cargo_toml_content).expect("Failed to write Cargo.toml.");
+    fs::write(&cargo_toml, cargo_toml_content).context("Failed to write Cargo.toml.")?;
 
     let main_rs = src_dir.join("main.rs");
-    let mut file = File::create(&main_rs).expect("Failed to create main.rs");
-    file.write_all(main_content.as_bytes()).expect("Failed to write main.rs");
+    let mut file = File::create(&main_rs).context("Failed to create main.rs")?;
+    file.write_all(main_content.as_bytes()).context("Failed to write main.rs")
 }
 
-fn get_host_target() -> String {
+fn get_host_target() -> Result<String> {
     let output = Command::new("rustc")
         .arg("-vV")
         .stdout(std::process::Stdio::piped())
         .output()
-        .expect("Failed to run rustc");
+        .context("Failed to run rustc")?;
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     for line in stdout.lines() {
         if line.starts_with("host:") {
-            return line["host:".len()..].trim().to_string();
+            return Ok(line["host:".len()..].trim().to_string());
         }
     }
-    panic!("Could not determine host target from rustc");
+    Err(anyhow!("Could not determine host target from rustc"))
 }
 
-fn run_cargo_project(project_dir: &PathBuf) -> String {
+fn run_cargo_project(project_dir: &PathBuf) -> Result<String> {
     // In case the project uses .cargo/config.toml, we need to explicitly revert target to native.
-    let host_target = get_host_target();
+    let host_target = get_host_target()?;
     let output = Command::new("cargo")
         .arg("run")
         .arg("--target")
         .arg(&host_target)
         .current_dir(project_dir)
         .output()
-        .expect("Failed to execute cargo run");
+        .context("Failed to execute cargo run")?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        eprintln!("{stderr}");
-        panic!("Cargo project failed to compile or run.");
+        // eprintln!("{stderr}"); // FIXME: Do we need that?
+        Err(anyhow!("Cargo project failed to compile or run: {stderr}"))
+    } else {
+        Ok(String::from_utf8_lossy(&output.stdout).to_string())
     }
-
-    String::from_utf8_lossy(&output.stdout).to_string()
 }
 
 // ====================
@@ -476,7 +498,7 @@ fn run_cargo_project(project_dir: &PathBuf) -> String {
 /// Find and expand the `output!` macro in the input `TokenStream`. After this lib stabilizes, this
 /// should be rewritten to standard macro and imported by the generated code.
 fn expand_output_macro(input: TokenStream) -> TokenStream {
-    let gen_mod = syn::Ident::new(GEN_MOD, proc_macro2::Span::call_site());
+    let gen_mod = syn::Ident::new(GEN_MOD, Span::call_site());
     let tokens: Vec<TokenTree> = input.into_iter().collect();
     let mut output = TokenStream::new();
     let mut i = 0;
@@ -488,7 +510,7 @@ fn expand_output_macro(input: TokenStream) -> TokenStream {
                         if let TokenTree::Group(ref group) = tokens[i + 2] {
                             let inner_rewritten = expand_output_macro(group.stream());
                             let content_str = print_tokens(&inner_rewritten);
-                            let lit = syn::LitStr::new(&content_str, proc_macro2::Span::call_site());
+                            let lit = syn::LitStr::new(&content_str, Span::call_site());
                             let new_tokens = quote! { #gen_mod::write_ln!(__output_buffer__, #lit); };
                             output.extend(new_tokens);
                             i += 3;
@@ -643,8 +665,8 @@ const WRONG_ARGS: &str = "Function should have at most one argument of the form 
 fn prepare_input_code(attributes:&str, body: &str) -> String {
     let body_esc: String = body.chars().flat_map(|c| c.escape_default()).collect();
     let prelude = gen_prelude();
-    format!(
-        "{attributes}
+    format!("
+        {attributes}
         {prelude}
 
         const SOURCE_CODE: &str = \"{body_esc}\";
@@ -679,33 +701,45 @@ fn parse_output(output: &str) -> String {
 }
 
 #[proc_macro_attribute]
-pub fn eval(_attr: proc_macro::TokenStream, item: proc_macro::TokenStream) -> proc_macro::TokenStream {
-    let input_fn = syn::parse_macro_input!(item as syn::ItemFn);
+pub fn eval(
+    attr: proc_macro::TokenStream,
+    item: proc_macro::TokenStream
+) -> proc_macro::TokenStream {
+    // SAFETY: Used to panic in case of error.
+    #[allow(clippy::unwrap_used)]
+    eval_impl(attr, item).unwrap()
+}
+
+fn eval_impl(
+    _attr: proc_macro::TokenStream,
+    item: proc_macro::TokenStream
+) -> Result<proc_macro::TokenStream> {
+    let input_fn = syn::parse::<syn::ItemFn>(item)?;
     let name = &input_fn.sig.ident.to_string();
     let args = &input_fn.sig.inputs;
     let body = &input_fn.block.stmts;
 
-    if args.len() > 1 { panic!("{}", WRONG_ARGS); }
+    if args.len() > 1 { return Err(anyhow!("{WRONG_ARGS}")); }
 
     let mut cfg = CargoConfig::default();
 
-    let input_pattern = extract_pattern(&args).unwrap_or_else(|| panic!("{}", WRONG_ARGS));
+    let input_pattern = extract_pattern(&args).context(WRONG_ARGS)?;
     let input_str = expand_output_macro(quote!{ #(#body)* }).to_string();
-    let paths = Paths::new(name, &input_str);
+    let paths = Paths::new(name, &input_str)?;
 
     if let Some(path) = &paths.cargo_toml_path {
-        cfg.fill_from_cargo_toml(&path).unwrap();
+        cfg.fill_from_cargo_toml(path)?;
     }
-    let attributes = cfg.extract_inline_attributes(input_fn.attrs);
+    let attributes = cfg.extract_inline_attributes(input_fn.attrs)?;
 
     dbg!("REWRITTEN INPUT: {input_str}");
 
     let input_code = prepare_input_code(&attributes, &input_str);
     let output = paths.with_output_dir(|output_dir| {
         dbg!("OUTPUT_DIR: {:?}", output_dir);
-        create_project_skeleton(&output_dir, cfg, &input_code);
+        create_project_skeleton(&output_dir, cfg, &input_code)?;
         run_cargo_project(&output_dir)
-    });
+    })?;
 
     let output_code = parse_output(&output);
     let macro_code = format!("
@@ -718,10 +752,13 @@ pub fn eval(_attr: proc_macro::TokenStream, item: proc_macro::TokenStream) -> pr
 
     dbg!("BODY: {macro_code}");
 
-    let out: TokenStream = macro_code.parse().expect("Failed to parse generated code.");
+    let out: TokenStream = macro_code.parse()
+        .map_err(|err| anyhow!("{err:?}"))
+        .context("Failed to parse generated code.")?;
     dbg!("OUTPUT : {out}");
-    out.into()
+    Ok(out.into())
 }
+
 
 // TODO: get lints from Cargo
 // TODO: support workspaces, for edition and dependencies
