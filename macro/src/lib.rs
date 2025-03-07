@@ -4,22 +4,29 @@
 #![cfg_attr(nightly, feature(proc_macro_span))]
 #![feature(proc_macro_diagnostic)]
 
+use anyhow::Error;
 use proc_macro2::Delimiter;
 use proc_macro2::LineColumn;
+use proc_macro2::Span;
 use proc_macro2::TokenStream;
 use proc_macro2::TokenTree;
+use quote::ToTokens;
 use quote::quote;
-use std::collections::hash_map::DefaultHasher;
 use std::fs::File;
 use std::fs;
-use std::hash::Hash;
-use std::hash::Hasher;
 use std::io::Write;
 use std::path::Path;
 use std::path::PathBuf;
 use std::process::Command;
-use quote::ToTokens;
 
+#[cfg(not(nightly))]
+mod non_nightly_deps {
+    pub use std::collections::hash_map::DefaultHasher;
+    pub use std::hash::Hash;
+    pub use std::hash::Hasher;
+}
+#[cfg(not(nightly))]
+use non_nightly_deps::*;
 
 // =================
 // === Constants ===
@@ -30,13 +37,10 @@ const OUT_DIR: &str = env!("OUT_DIR");
 /// Set to 'true' to enable debug prints.
 const DEBUG: bool = false;
 
-const THIS_CRATE_NAME: &str = "eval_macro";
+const CRATE: &str = "crabtime";
+const GEN_MOD: &str = CRATE;
 
-mod prefix {
-    pub const OUTPUT: &str = "OUTPUT:";
-    pub const WARNING: &str = "WARNING:";
-    pub const ERROR: &str = "ERROR:";
-}
+const OUTPUT_PREFIX: &str = "[OUTPUT]";
 
 /// Rust keywords for special handling. This is not needed for this macro to work, it is only used
 /// to make `IntelliJ` / `RustRover` work correctly, as their `TokenStream` spans are incorrect.
@@ -48,54 +52,168 @@ const KEYWORDS: &[&str] = &[
     "override", "priv", "typeof", "unsized", "virtual", "yield", "try",
 ];
 
-/// Common functions. After this lib stabilizes, they should be imported from this library, not
-/// injected.
-const PRELUDE: &str = "
-    macro_rules! write_ln {
-        ($target:ident, $($ts:tt)*) => {
-            $target.push_str(&format!( $($ts)* ));
-            $target.push_str(\"\n\");
-        };
+// ==============
+// === Errors ===
+// ==============
+
+type Result<T=(), E=Error> = anyhow::Result<T, E>;
+
+// ==================
+// === TokenRange ===
+// ==================
+
+#[derive(Debug)]
+struct TokenRange {
+    start: TokenTree,
+    end: TokenTree,
+}
+
+impl TokenRange {
+    fn new(start: TokenTree, end: TokenTree) -> Self {
+        Self { start, end }
     }
 
-    macro_rules! println_output {
-        ($($ts:tt)*) => {
-            println!(\"{}\", prefix_lines_with_output(&format!( $($ts)* )));
-        };
+    #[cfg(nightly)]
+    fn span(&self) -> Span {
+        let first_span = self.start.span();
+        let last_span = self.end.span();
+        first_span.join(last_span).unwrap_or_else(|| first_span)
+    }
+}
+
+// ===============
+// === Logging ===
+// ===============
+
+#[derive(Clone, Copy, Debug)]
+enum Level {
+    Warning,
+    Error,
+}
+
+impl Level {
+    const WARNING_PREFIX: &'static str = "[WARNING]";
+    const ERROR_PREFIX: &'static str = "[ERROR]";
+
+    #[cfg(not(nightly))]
+    fn prefix(&self) -> &str {
+        match self {
+            Level::Warning => Self::WARNING_PREFIX,
+            Level::Error => Self::ERROR_PREFIX,
+        }
+    }
+}
+
+#[cfg(nightly)]
+impl From<Level> for proc_macro::Level {
+    fn from(level: Level) -> Self {
+        match level {
+            Level::Warning => proc_macro::Level::Warning,
+            Level::Error => proc_macro::Level::Error,
+        }
+    }
+}
+
+fn print(level: Level, message: &str) {
+    #[cfg(nightly)] {
+        let span = proc_macro::Span::call_site();
+        proc_macro::Diagnostic::spanned(span, level.into(), message).emit();
+    }
+    #[cfg(not(nightly))] {
+        println!("{} {message}", level.prefix());
+    }
+}
+
+macro_rules! dbg     { ($($ts:tt)*) => { if DEBUG { println!( $($ts)* )}  }; }
+macro_rules! warning { ($($ts:tt)*) => { print (Level::Warning, &format!( $($ts)* )); }; }
+macro_rules! error   { ($($ts:tt)*) => { print (Level::Error,   &format!( $($ts)* )); }; }
+
+// ==============================
+// === Generated Code Prelude ===
+// ==============================
+
+fn gen_prelude() -> String {
+    let warning_prefix = Level::WARNING_PREFIX;
+    let error_prefix = Level::ERROR_PREFIX;
+    format!("
+        mod {GEN_MOD} {{
+            #![allow(clippy::all)]
+
+            const OUTPUT_PREFIX: &'static str = \"{OUTPUT_PREFIX}\";
+            const WARNING_PREFIX: &'static str = \"{warning_prefix}\";
+            const ERROR_PREFIX: &'static str = \"{error_prefix}\";
+
+            macro_rules! output_str {{
+                ($($ts:tt)*) => {{
+                    println!(\"{{}}\", {GEN_MOD}::prefix_lines_with_output(&format!($($ts)*)));
+                }};
+            }}
+            pub(super) use output_str;
+
+            macro_rules! warning {{
+                ($($ts:tt)*) => {{
+                    println!(\"{{}}\", {GEN_MOD}::prefix_lines_with_warning(&format!($($ts)*)));
+                }};
+            }}
+            pub(super) use warning;
+
+            macro_rules! error {{
+                ($($ts:tt)*) => {{
+                    println!(\"{{}}\", {GEN_MOD}::prefix_lines_with_error(&format!($($ts)*)));
+                }};
+            }}
+            pub(super) use error;
+
+            {PRELUDE_STATIC}
+        }}
+
+        {PRELUDE_MAGIC}
+    ")
+}
+
+const PRELUDE_STATIC: &str = "
+    pub(super) fn push_as_str<T: std::fmt::Debug>(str: &mut String, value: &T) {
+        let repr = format!(\"{value:?}\");
+        if repr != \"()\" {
+            if repr.starts_with(\"(\") && repr.ends_with(\")\") {
+                str.push_str(&repr[1..repr.len() - 1]);
+            } else {
+                str.push_str(&repr);
+            }
+        }
     }
 
-    macro_rules! println_warning {
-        ($($ts:tt)*) => {
-            println!(\"{}\", prefix_lines_with_warning(&format!( $($ts)* )));
-        };
-    }
-
-    macro_rules! println_error {
-        ($($ts:tt)*) => {
-            println!(\"{}\", prefix_lines_with_error(&format!( $($ts)* )));
-        };
-    }
-
-    fn prefix_lines_with(prefix: &str, input: &str) -> String {
+    pub(super) fn prefix_lines_with(prefix: &str, input: &str) -> String {
         input
             .lines()
-            .map(|line| format!(\"{prefix}: {line}\"))
+            .map(|line| format!(\"{prefix} {line}\"))
             .collect::<Vec<_>>()
             .join(\"\\n\")
     }
 
-    fn prefix_lines_with_output(input: &str) -> String {
-        prefix_lines_with(\"OUTPUT\", input)
+    pub(super) fn prefix_lines_with_output(input: &str) -> String {
+        prefix_lines_with(OUTPUT_PREFIX, input)
     }
 
-    fn prefix_lines_with_warning(input: &str) -> String {
-        prefix_lines_with(\"WARNING\", input)
+    pub(super) fn prefix_lines_with_warning(input: &str) -> String {
+        prefix_lines_with(WARNING_PREFIX, input)
     }
 
-    fn prefix_lines_with_error(input: &str) -> String {
-        prefix_lines_with(\"ERROR\", input)
+    pub(super) fn prefix_lines_with_error(input: &str) -> String {
+        prefix_lines_with(ERROR_PREFIX, input)
     }
 
+    macro_rules! write_ln {
+        ($target:expr, $($ts:tt)*) => {
+            $target.push_str(&format!( $($ts)* ));
+            $target.push_str(\"\n\");
+        };
+    }
+    pub(super) use write_ln;
+";
+
+/// To be removed one day.
+const PRELUDE_MAGIC: &str = "
     fn sum_combinations(n: usize) -> Vec<Vec<usize>> {
         let mut result = Vec::new();
 
@@ -117,75 +235,11 @@ const PRELUDE: &str = "
         generate(n, vec![], &mut result);
         result
     }
-
-    fn push_as_str<T: std::fmt::Debug>(str: &mut String, value: &T) {
-        let repr = format!(\"{value:?}\");
-        if repr != \"()\" {
-            if repr.starts_with(\"(\") && repr.ends_with(\")\") {
-                str.push_str(&repr[1..repr.len() - 1]);
-            } else {
-                str.push_str(&repr);
-            }
-        }
-    }
 ";
 
-// ===============
-// === Logging ===
-// ===============
-
-macro_rules! dbg     { ($($ts:tt)*) => { if DEBUG      {println!( $($ts)* )}  }; }
-macro_rules! warning { ($($ts:tt)*) => { print_warning (&format!( $($ts)* )); }; }
-macro_rules! error   { ($($ts:tt)*) => { print_error   (&format!( $($ts)* )); }; }
-
-#[cfg(nightly)]
-fn print_warning(message: &str) {
-    let span = proc_macro::Span::call_site();
-    let level = proc_macro::Level::Warning;
-    proc_macro::Diagnostic::spanned(span, level, message).emit();
-}
-
-#[cfg(nightly)]
-fn print_error(message: &str) {
-    let span = proc_macro::Span::call_site();
-    let level = proc_macro::Level::Error;
-    proc_macro::Diagnostic::spanned(span, level, message).emit();
-}
-
-#[cfg(not(nightly))]
-fn print_warning(message: &str) {
-    println!("[WARNING] {}", message);
-}
-
-#[cfg(not(nightly))]
-fn print_error(message: &str) {
-    println!("[ERROR] {}", message);
-}
-
-// ============
-// === Path ===
-// ============
-
-/// Traverse up the directory tree from `start_path` until a `Cargo.toml` file is found.
-/// Returns the full path to `Cargo.toml`, or `None` if no `Cargo.toml` was found.
-fn find_cargo_toml(mut start_path: PathBuf) -> Option<PathBuf> {
-    loop {
-        let candidate = start_path.join("Cargo.toml");
-        if candidate.is_file() {
-            return Some(candidate);
-        }
-
-        // Move up one level. If there's no parent, we've hit the filesystem root.
-        if !start_path.pop() {
-            break;
-        }
-    }
-
-    None
-}
-
-
-
+// =============
+// === Paths ===
+// =============
 
 #[derive(Debug)]
 struct Paths {
@@ -206,11 +260,11 @@ impl Paths {
         let target_dir = crate_out_dir.ancestors().find(|p| p.file_name() == Some(target_dir_name)).unwrap();
         let workspace_dir = target_dir.parent().unwrap();
         let file_path = workspace_dir.join(&call_site_path);
-        let cargo_toml_path = find_cargo_toml(file_path).unwrap();
+        let cargo_toml_path = find_cargo_configs(file_path).into_iter().next().unwrap();
 
         let build_dir_name = std::ffi::OsStr::new("build");
         let build_dir = crate_out_dir.ancestors().find(|p| p.file_name() == Some(build_dir_name)).unwrap();
-        let output_dir = build_dir.join(THIS_CRATE_NAME).join(call_site_path).join(macro_name);
+        let output_dir = build_dir.join(CRATE).join(call_site_path).join(macro_name);
 
         Self {
             output_dir,
@@ -221,7 +275,7 @@ impl Paths {
     #[cfg(not(nightly))]
     fn new(_macro_name: &str, input_str: &str) -> Self {
         let home_dir = std::env::var("HOME").unwrap();
-        let eval_macro_dir = PathBuf::from(home_dir).join(".cargo").join(THIS_CRATE_NAME);
+        let eval_macro_dir = PathBuf::from(home_dir).join(".cargo").join(CRATE);
         let project_name = project_name_from_input(input_str);
         let output_dir = eval_macro_dir.join(&project_name);
         Self {
@@ -243,22 +297,57 @@ impl Paths {
     }
 }
 
-// ==========================
-// === Project Management ===
-// ==========================
+#[cfg(not(nightly))]
+fn project_name_from_input(input_str: &str) -> String {
+    let mut hasher = DefaultHasher::new();
+    input_str.hash(&mut hasher);
+    format!("project_{:016x}", hasher.finish())
+}
+
+/// Traverse up the directory tree from `path` until all `Cargo.toml` files are found.
+fn find_cargo_configs(mut path: PathBuf) -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    loop {
+        let candidate = path.join("Cargo.toml");
+        if candidate.is_file() { out.push(candidate) }
+        if !path.pop() { break }
+    }
+    out
+}
+
+// ===================
+// === CargoConfig ===
+// ===================
+
+#[derive(Debug)]
+struct Dependency {
+    tokens_str: String,
+    token_range: Option<TokenRange>,
+}
+
+impl Dependency {
+    fn new(tokens_str: String, token_range: Option<TokenRange>) -> Self {
+        Self { tokens_str, token_range }
+    }
+
+    #[cfg(nightly)]
+    fn span(&self) -> Span {
+        self.token_range.as_ref().map_or(Span::call_site(), |range| range.span())
+    }
+}
 
 #[derive(Debug, Default)]
 struct CargoConfig {
     edition: Option<String>,
     resolver: Option<String>,
-    dependencies: Vec<String>,
+    dependencies: Vec<Dependency>,
 }
 
 impl CargoConfig {
     fn print(&self) -> String {
         let edition = self.edition.as_ref().map_or("2024", |t| t.as_str());
         let resolver = self.resolver.as_ref().map_or("3", |t| t.as_str());
-        let dependencies = self.dependencies.join("\n");
+        let dependencies = self.dependencies.iter().map(|t| t.tokens_str.clone()).collect::<Vec<_>>().join("\n");
         format!("
             [workspace]
             [package]
@@ -289,20 +378,24 @@ impl CargoConfig {
             .and_then(|table| table.get("edition"))
             .and_then(|v| v.as_str())
             .unwrap_or("2024");
-        self.dependencies.extend(dependencies);
+        self.dependencies.extend(dependencies.into_iter().map(|t| Dependency::new(t, None)));
         self.edition = Some(edition.to_string());
         Ok(())
     }
 
-    fn extract_attributes(&mut self, attributes: Vec<syn::Attribute>) -> String {
+    fn extract_inline_attributes(&mut self, attributes: Vec<syn::Attribute>) -> String {
         let mut other_attributes = Vec::with_capacity(attributes.len());
+        let mut new_dependencies = vec![];
         for attr in attributes {
             let tokens = attr.parse_args::<TokenStream>().unwrap_or_else(|err|
                 panic!("Failed to parse attributes: {}", err)
             );
             let tokens_str = tokens.to_string().replace(" ", "");
+            let first_token = tokens.clone().into_iter().next().unwrap();
+            let last_token = tokens.clone().into_iter().last().unwrap();
+            let token_range = Some(TokenRange::new(first_token, last_token));
             if attr.path().is_ident("dependency") {
-                self.dependencies.push(tokens_str);
+                new_dependencies.push(Dependency::new(tokens_str, token_range));
             } else if attr.path().is_ident("edition") {
                 if self.edition.is_some() {
                     panic!("Edition already set.");
@@ -313,21 +406,16 @@ impl CargoConfig {
             }
         }
         #[cfg(nightly)]
-        if !self.dependencies.is_empty() {
-            let span = proc_macro::Span::call_site();
+        for dependency in &new_dependencies {
+            let span = dependency.span().unwrap();
             let level = proc_macro::Level::Warning;
             let message = "On nightly Rust channel you should not define dependencies here. Use `#[build_dependencies]` in your Cargo.toml instead.";
             proc_macro::Diagnostic::spanned(span, level, message).emit();
         }
+        self.dependencies.extend(new_dependencies);
         other_attributes.join("\n")
     }
 
-}
-
-fn project_name_from_input(input_str: &str) -> String {
-    let mut hasher = DefaultHasher::new();
-    input_str.hash(&mut hasher);
-    format!("project_{:016x}", hasher.finish())
 }
 
 fn create_project_skeleton(project_dir: &Path, cfg: CargoConfig, main_content: &str) {
@@ -381,83 +469,6 @@ fn run_cargo_project(project_dir: &PathBuf) -> String {
     String::from_utf8_lossy(&output.stdout).to_string()
 }
 
-// ===================================
-// === Top-level Attribute Parsing ===
-// ===================================
-
-fn extract_dependencies(cfg: &mut CargoConfig, tokens: TokenStream) -> TokenStream {
-    let (tokens2, attributes) = extract_top_level_attributes(tokens);
-    for attr in attributes {
-        if let Some(pos) = attr.find('(') {
-            let name = &attr[..pos];
-            let value = (&attr[pos + 1.. attr.len() - 1]).to_string(); // Skipping ")".
-            match name {
-                "dependency" => cfg.dependencies.push(value),
-                "edition" => {
-                    if cfg.edition.is_some() {
-                        panic!("Edition already set.");
-                    }
-                    cfg.edition = Some(value);
-                },
-                "resolver" => {
-                    if cfg.resolver.is_some() {
-                        panic!("Resolver already set.");
-                    }
-                    cfg.resolver = Some(value);
-                },
-
-                // "feature" => cfg.lib.features.push(value),
-                // "allow" => cfg.lib.allow.push(value),
-                // "expect" => cfg.lib.expect.push(value),
-                // "warn" => cfg.lib.warn.push(value),
-                // "deny" => cfg.lib.deny.push(value),
-                // "forbid" => cfg.lib.forbid.push(value),
-                _ => panic!("Invalid attribute: {attr}"),
-            }
-        } else {
-            panic!("Invalid attribute: {attr}");
-        }
-    }
-    tokens2
-}
-
-/// Extract all top-level attributes (`#![...]`) from the input `TokenStream` and return the
-/// remaining `TokenStream`.
-fn extract_top_level_attributes(tokens: TokenStream) -> (TokenStream, Vec<String>) {
-    let mut output = TokenStream::new();
-    let mut attributes = Vec::new();
-    let mut iter = tokens.into_iter().peekable();
-    while let Some(_token) = iter.peek() {
-        if let Some(dep) = try_parse_inner_attr(&mut iter) {
-            attributes.push(dep);
-        } else if let Some(token) = iter.next() {
-            output.extend(Some(token));
-        }
-    }
-    (output, attributes)
-}
-
-/// Try to parse `#![...]` as an inner attribute and return the parsed content if successful.
-fn try_parse_inner_attr(iter: &mut std::iter::Peekable<impl Iterator<Item = TokenTree>>) -> Option<String> {
-    // Check for '#'.
-    let Some(TokenTree::Punct(pound)) = iter.peek() else { return None; };
-    if pound.as_char() != '#' { return None; }
-    iter.next();
-
-    // Check for '!'.
-    let Some(TokenTree::Punct(bang)) = iter.peek() else { return None; };
-    if bang.as_char() != '!' { return None; }
-    iter.next();
-
-    // Check for [ ... ] group.
-    let Some(TokenTree::Group(group)) = iter.peek() else { return None; };
-    if group.delimiter() != Delimiter::Bracket { return None; }
-    let content = group.stream().to_string();
-    iter.next();
-
-    Some(content)
-}
-
 // ====================
 // === Output Macro ===
 // ====================
@@ -465,6 +476,7 @@ fn try_parse_inner_attr(iter: &mut std::iter::Peekable<impl Iterator<Item = Toke
 /// Find and expand the `output!` macro in the input `TokenStream`. After this lib stabilizes, this
 /// should be rewritten to standard macro and imported by the generated code.
 fn expand_output_macro(input: TokenStream) -> TokenStream {
+    let gen_mod = syn::Ident::new(GEN_MOD, proc_macro2::Span::call_site());
     let tokens: Vec<TokenTree> = input.into_iter().collect();
     let mut output = TokenStream::new();
     let mut i = 0;
@@ -475,9 +487,9 @@ fn expand_output_macro(input: TokenStream) -> TokenStream {
                     if excl.as_char() == '!' && i + 2 < tokens.len() {
                         if let TokenTree::Group(ref group) = tokens[i + 2] {
                             let inner_rewritten = expand_output_macro(group.stream());
-                            let content_str = print(&inner_rewritten);
+                            let content_str = print_tokens(&inner_rewritten);
                             let lit = syn::LitStr::new(&content_str, proc_macro2::Span::call_site());
-                            let new_tokens = quote! { write_ln!(__output_buffer__, #lit); };
+                            let new_tokens = quote! { #gen_mod::write_ln!(__output_buffer__, #lit); };
                             output.extend(new_tokens);
                             i += 3;
                             continue;
@@ -533,11 +545,11 @@ const SPACER: &str = "%%%";
 /// rustc ones, so sometimes tokens are glued together. This is why we discover Rust keywords and add
 /// additional spacing around. This is probably not covering all the bugs. If there will be a bug
 /// report, this is the place to look at.
-fn print(tokens: &TokenStream) -> String {
-    print_internal(tokens).output.replace("{%%%", "{ %%%").replace("%%%}", "%%% }").replace(SPACER, "")
+fn print_tokens(tokens: &TokenStream) -> String {
+    print_tokens_internal(tokens).output.replace("{%%%", "{ %%%").replace("%%%}", "%%% }").replace(SPACER, "")
 }
 
-fn print_internal(tokens: &TokenStream) -> PrintOutput {
+fn print_tokens_internal(tokens: &TokenStream) -> PrintOutput {
     let token_vec: Vec<TokenTree> = tokens.clone().into_iter().collect();
     let mut output = String::new();
     let mut first_token_start = None;
@@ -548,7 +560,7 @@ fn print_internal(tokens: &TokenStream) -> PrintOutput {
         let mut is_keyword = false;
         let token_str = match token {
             TokenTree::Group(g) => {
-                let content = print_internal(&g.stream());
+                let content = print_tokens_internal(&g.stream());
                 let mut content_str = content.output;
                 content_str.pop();
                 let (open, close) = match g.delimiter() {
@@ -587,9 +599,7 @@ fn print_internal(tokens: &TokenStream) -> PrintOutput {
             TokenTree::Literal(lit) => lit.to_string(),
             TokenTree::Punct(punct) => punct.as_char().to_string(),
         };
-        if DEBUG {
-            println!("{i}: [{token_start:?}-{token_end:?}] [{prev_token_end:?}]: {token}");
-        }
+        dbg!("{i}: [{token_start:?}-{token_end:?}] [{prev_token_end:?}]: {token}");
         if let Some(prev_token_end) = prev_token_end {
             if prev_token_end.line == token_start.line && prev_token_end.column >= token_start.column {
                 output.pop();
@@ -632,9 +642,10 @@ const WRONG_ARGS: &str = "Function should have at most one argument of the form 
 
 fn prepare_input_code(attributes:&str, body: &str) -> String {
     let body_esc: String = body.chars().flat_map(|c| c.escape_default()).collect();
+    let prelude = gen_prelude();
     format!(
         "{attributes}
-        {PRELUDE}
+        {prelude}
 
         const SOURCE_CODE: &str = \"{body_esc}\";
 
@@ -643,8 +654,8 @@ fn prepare_input_code(attributes:&str, body: &str) -> String {
             let result = {{
                 {body}
             }};
-            push_as_str(&mut __output_buffer__, &result);
-            println!(\"{{}}\", prefix_lines_with_output(&__output_buffer__));
+            {GEN_MOD}::push_as_str(&mut __output_buffer__, &result);
+            println!(\"{{}}\", {GEN_MOD}::prefix_lines_with_output(&__output_buffer__));
         }}",
     )
 }
@@ -653,13 +664,13 @@ fn parse_output(output: &str) -> String {
     let mut code = String::new();
     for line in output.split('\n') {
         let line_trimmed = line.trim();
-        if line_trimmed.starts_with(prefix::OUTPUT) {
-            code.push_str(&line_trimmed[prefix::OUTPUT.len()..]);
+        if line_trimmed.starts_with(OUTPUT_PREFIX) {
+            code.push_str(&line_trimmed[OUTPUT_PREFIX.len()..]);
             code.push('\n');
-        } else if line_trimmed.starts_with(prefix::WARNING) {
-            warning!("{}", &line_trimmed[prefix::WARNING.len()..]);
-        } else if line_trimmed.starts_with(prefix::ERROR) {
-            error!("{}", &line_trimmed[prefix::ERROR.len()..]);
+        } else if line_trimmed.starts_with(Level::WARNING_PREFIX) {
+            warning!("{}", &line_trimmed[Level::WARNING_PREFIX.len()..]);
+        } else if line_trimmed.starts_with(Level::ERROR_PREFIX) {
+            error!("{}", &line_trimmed[Level::ERROR_PREFIX.len()..]);
         } else if line_trimmed.len() > 0 {
             println!("{line}");
         }
@@ -677,7 +688,7 @@ pub fn eval(_attr: proc_macro::TokenStream, item: proc_macro::TokenStream) -> pr
     if args.len() > 1 { panic!("{}", WRONG_ARGS); }
 
     let mut cfg = CargoConfig::default();
-    let attributes = cfg.extract_attributes(input_fn.attrs);
+
     let input_pattern = extract_pattern(&args).unwrap_or_else(|| panic!("{}", WRONG_ARGS));
     let input_str = expand_output_macro(quote!{ #(#body)* }).to_string();
     let paths = Paths::new(name, &input_str);
@@ -685,6 +696,7 @@ pub fn eval(_attr: proc_macro::TokenStream, item: proc_macro::TokenStream) -> pr
     if let Some(path) = &paths.cargo_toml_path {
         cfg.fill_from_cargo_toml(&path).unwrap();
     }
+    let attributes = cfg.extract_inline_attributes(input_fn.attrs);
 
     dbg!("REWRITTEN INPUT: {input_str}");
 
@@ -713,3 +725,10 @@ pub fn eval(_attr: proc_macro::TokenStream, item: proc_macro::TokenStream) -> pr
 
 // TODO: get lints from Cargo
 // TODO: support workspaces, for edition and dependencies
+
+// TODO:
+//     crabtime::rules! {
+//         test (input: TokenStream) => {
+//             // ...
+//         }
+//     }
