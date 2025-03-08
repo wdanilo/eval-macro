@@ -3,7 +3,7 @@
 
 mod error;
 
-use std::fmt::Debug;
+use std::fmt::{Debug, Display};
 use proc_macro2::Delimiter;
 use proc_macro2::LineColumn;
 use proc_macro2::Span;
@@ -82,9 +82,10 @@ impl TokenRange {
 // === Generated Code Prelude ===
 // ==============================
 
-fn gen_prelude() -> String {
+fn gen_prelude(include_token_stream_impl: bool) -> String {
     let warning_prefix = Level::WARNING_PREFIX;
     let error_prefix = Level::ERROR_PREFIX;
+    let prelud_ts = if include_token_stream_impl { PRELUDE_FOR_TOKEN_STREAM } else { "" };
     format!("
         mod {GEN_MOD} {{
             #![allow(clippy::all)]
@@ -115,11 +116,20 @@ fn gen_prelude() -> String {
             pub(super) use error;
 
             {PRELUDE_STATIC}
+            {prelud_ts}
         }}
 
         {PRELUDE_MAGIC}
     ")
 }
+
+const PRELUDE_FOR_TOKEN_STREAM: &str = "
+    impl CodeFromOutput for proc_macro2::TokenStream {
+        fn code_from_output(output: Self) -> String {
+            output.to_string()
+        }
+    }
+";
 
 const PRELUDE_STATIC: &str = "
     pub(super) trait CodeFromOutput {
@@ -311,13 +321,14 @@ fn find_cargo_configs(path: &PathBuf) -> Result<CargoConfigPaths> {
 
 #[derive(Debug)]
 struct Dependency {
+    label: String,
     tokens_str: String,
     token_range: Option<TokenRange>,
 }
 
 impl Dependency {
-    fn new(tokens_str: String, token_range: Option<TokenRange>) -> Self {
-        Self { tokens_str, token_range }
+    fn new(label: String, tokens_str: String, token_range: Option<TokenRange>) -> Self {
+        Self { label, tokens_str, token_range }
     }
 
     #[cfg(nightly)]
@@ -334,11 +345,15 @@ struct CargoConfig {
 }
 
 impl CargoConfig {
+    fn contains_dependency(&self, name: &str) -> bool {
+        self.dependencies.iter().any(|d| d.label == name)
+    }
+
     fn print(&self) -> String {
         let edition = self.edition.as_ref().map_or(DEFAULT_EDITION, |t| t.as_str());
         let resolver = self.resolver.as_ref().map_or(DEFAULT_RESOLVER, |t| t.as_str());
         let dependencies = self.dependencies.iter()
-            .map(|t| t.tokens_str.clone())
+            .map(|t| format!("{} = {}", t.label.clone(), t.tokens_str.clone())) // FIXME: move to dependency method
             .collect::<Vec<_>>()
             .join("\n");
         format!("
@@ -360,29 +375,33 @@ impl CargoConfig {
         let dependencies = parsed
             .get("build-dependencies")
             .and_then(|v| v.as_table())
-            .map_or(vec![], |t| t.iter().map(|(k, v)| format!("{k} = {v}")).collect());
+            .map_or(vec![], |t| t.iter().map(|(k, v)| Dependency::new(k.clone(), format!("{v}"), None)).collect());
         let edition = parsed
             .get("package")
             .and_then(|v| v.as_table())
             .and_then(|table| table.get("edition"))
             .and_then(|v| v.as_str())
             .unwrap_or("2024");
-        self.dependencies.extend(dependencies.into_iter().map(|t| Dependency::new(t, None)));
+        self.dependencies.extend(dependencies);
         self.edition = Some(edition.to_string());
         Ok(())
     }
 
     fn extract_inline_attributes(&mut self, attributes: Vec<syn::Attribute>) -> Result<String> {
         let mut other_attributes = Vec::with_capacity(attributes.len());
-        let mut new_dependencies = vec![];
+        let mut new_dependencies: Vec<Dependency> = vec![]; // FIXME expl typing not needed
         for attr in attributes {
             let tokens = attr.parse_args::<TokenStream>().context("Failed to parse attributes")?;
+            println!(">>>> {:?}", tokens);
             let tokens_str = tokens.to_string().replace(" ", "");
             let token_range = tokens.clone().into_iter().next()
                 .zip(tokens.clone().into_iter().last())
                 .map(|(first, last)| TokenRange::new(first, last));
             if attr.path().is_ident("dependency") {
-                new_dependencies.push(Dependency::new(tokens_str, token_range));
+                let (key, value) = tokens_str.split_once('=').context(||
+                    error!("Incorrect dependency '{tokens_str}'")
+                )?;
+                new_dependencies.push(Dependency::new(key.to_string(), value.to_string(), token_range)); // FIXME
             } else if attr.path().is_ident("edition") {
                 self.edition = Some(tokens_str);
             } else {
@@ -614,20 +633,20 @@ fn print_tokens_internal(tokens: &TokenStream) -> PrintOutput {
 // ==================
 
 enum Args {
-    TokenTree { ident: syn::Ident },
+    TokenStream { ident: syn::Ident },
     Pattern { str: String }
 }
 
 impl Args {
     fn pattern(&self) -> String {
         match self {
-            Self::TokenTree { .. } => Default::default(),
+            Self::TokenStream { .. } => Default::default(),
             Self::Pattern { str } => str.clone(),
         }
     }
 
     fn setup(&self) -> String {
-        if let Self::TokenTree { ident } = self {
+        if let Self::TokenStream { ident } = self {
             format!("
                 use proc_macro2::TokenStream;
                 let {ident}: TokenStream = SOURCE_CODE.parse().unwrap();
@@ -642,7 +661,7 @@ fn parse_args(
     args: &syn::punctuated::Punctuated<syn::FnArg, syn::token::Comma>
 ) -> Option<Args> {
     let Some(arg) = args.first() else { return Some(Args::Pattern { str: String::new() }) };
-    parse_args_for_pattern(arg).or_else(|| parse_args_for_token_tree(arg))
+    parse_args_for_pattern(arg).or_else(|| parse_args_for_token_stream(arg))
 }
 
 fn parse_args_for_pattern(arg: &syn::FnArg) -> Option<Args> {
@@ -651,14 +670,14 @@ fn parse_args_for_pattern(arg: &syn::FnArg) -> Option<Args> {
     Some(Args::Pattern {str: m.mac.tokens.to_string() })
 }
 
-fn parse_args_for_token_tree(arg: &syn::FnArg) -> Option<Args> {
+fn parse_args_for_token_stream(arg: &syn::FnArg) -> Option<Args> {
     let syn::FnArg::Typed(pat) = arg else { return None };
     let syn::Pat::Ident(pat_ident) = &*pat.pat else { return None };
     let tp = &pat.ty;
     let tp_str = quote! { #tp }.to_string();
     if tp_str != "TokenStream" { return None }
     let ident = pat_ident.ident.clone();
-    Some(Args::TokenTree { ident })
+    Some(Args::TokenStream { ident })
 }
 
 const WRONG_ARGS: &str = "Function should have zero or one argument, one of:
@@ -667,9 +686,9 @@ const WRONG_ARGS: &str = "Function should have zero or one argument, one of:
 ";
 
 
-fn prepare_input_code(attributes:&str, body: &str) -> String {
+fn prepare_input_code(attributes:&str, body: &str, include_token_stream_impl: bool) -> String {
     let body_esc: String = body.chars().flat_map(|c| c.escape_default()).collect();
-    let prelude = gen_prelude();
+    let prelude = gen_prelude(include_token_stream_impl);
     format!("
         {attributes}
         {prelude}
@@ -743,7 +762,8 @@ fn function_impl(
         cfg.fill_from_cargo_toml(path)?;
     }
     let attributes = cfg.extract_inline_attributes(input_fn_ast.attrs)?;
-    let input_code = prepare_input_code(&attributes, &input_str);
+    let include_token_stream_impl = cfg.contains_dependency("proc-macro2");
+    let input_code = prepare_input_code(&attributes, &input_str, include_token_stream_impl);
     let (output, was_cached) = paths.with_output_dir(|output_dir| {
         debug!("OUTPUT_DIR: {:?}", output_dir);
         let was_cached = create_project_skeleton(&output_dir, cfg, &input_code)?;

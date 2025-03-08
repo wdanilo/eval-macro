@@ -39,19 +39,109 @@
 //!
 //! Use the `crabtime::function` attribute to define a new [function-like macro](...). The body of
 //! the macro is a regular Rust code, which will be compiled and executed at build time. To output
-//! code from the macro, you can use one of the following methods.
+//! code from the macro, you can use one of the following methods. Let's see how each method works
+//! based on a simple example, generating the following Rust code:
 //!
-//! ### String Output
+//! ```
+//! enum Position1 { X }
+//! enum Position2 { X, Y }
+//! enum Position3 { X, Y, Z }
+//! enum Position4 { X, Y, Z, W }
+//! ```
+//!
+//! ### Output String
+//!
+//! You can simply return a string from the function. It will be pasted as the macro result.
 //!
 //! ```
 //! #[crabtime::function]
-//! fn gen() {
+//! fn generate() {
 //!     let components = ["X", "Y", "Z", "W"];
 //!     components.iter().enumerate().map(|(ix, name)| {
 //!         let dim = ix + 1;
 //!         let cons = components[0..dim].join(",");
-//!         format!("enum Position{ix} {{ {cons} }}")
-//!     }).collect::<Vec<_>>.join("\n")
+//!         format!("enum Position{dim} {{ {cons} }}")
+//!     }).collect::<Vec<_>>().join("\n")
+//! }
+//! generate!();
+//! # fn main() {}
+//! ```
+//!
+//! ### Output by `crabtime.output` function
+//!
+//! Alternatively, you can use the `crabtime.output` function to write strings to the output buffer:
+//!
+//! ```
+//! #[crabtime::function]
+//! fn generate() {
+//!     let components = ["X", "Y", "Z", "W"];
+//!     for (ix, name) in components.iter().enumerate() {
+//!         let dim = ix + 1;
+//!         let cons = components[0..dim].join(",");
+//!         crabtime.output(format!("enum Position{dim} {{ {cons} }}"))
+//!     }
+//! }
+//! generate!();
+//! # fn main() {}
+//! ```
+//!
+//! ### Output by the `output!` macro
+//!
+//! You can also use the `output!` macro, which allows for space-aware variable interpolation. It's like
+//! the `format!` macro, but with inversed rules regarding curly braces – it preserves single braces and
+//! uses double braces for interpolation. Please note that it preserves spaces, so `Position{{ix}}` can
+//! be used to generate `Position1`, `Position2`, etc.
+//!
+//! ```
+//! #[crabtime::function]
+//! fn generate() {
+//!     let components = ["X", "Y", "Z", "W"];
+//!     for (ix, name) in components.iter().enumerate() {
+//!         let dim = ix + 1;
+//!         let cons = components[0..dim].join(",");
+//!         output! {
+//!             enum Position{{dim}} {
+//!                 {{cons}}
+//!             }
+//!         }
+//!     }
+//! }
+//! generate!();
+//! # fn main() {}
+//! ```
+//!
+//! ### Output `TokenStream`
+//!
+//! Finally, you can output `TokenStream` from the macro. Please note that for brevity the below example uses
+//! [inline dependency injection](...), which is described later.
+//!
+//! ```
+//! #[crabtime::function]
+//! fn generate() {
+//!     // Inline dependencies used for brevity.
+//!     // You should use [build-dependencies] section in your Cargo.toml instead.
+//!     #![dependency(proc-macro2 = "1")]
+//!     #![dependency(syn = "2")]
+//!     #![dependency(quote = "1")]
+//!     use proc_macro2::Span;
+//!     use quote::quote;
+//!
+//!     let components = ["X", "Y", "Z", "W"];
+//!     let defs = components.iter().enumerate().map(|(ix, name)| {
+//!         let dim = ix + 1;
+//!         let cons = components[0..dim].iter().map(|t|
+//!             syn::Ident::new(t, Span::call_site())
+//!         );
+//!         let ident = syn::Ident::new(&format!("Position{dim}"), Span::call_site());
+//!         quote! {
+//!             enum #ident {
+//!                 #(#cons),*
+//!             }
+//!         }
+//!     }).collect::<Vec<_>>();
+//!     quote! {
+//!         #(#defs)*
+//!     }
 //! }
 //! # fn main() {}
 //! ```
