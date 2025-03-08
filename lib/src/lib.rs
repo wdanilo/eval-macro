@@ -3,34 +3,37 @@
 //! <br/>
 //! <br/>
 //!
-//! # 🌀 Eval Macro
+//! # 🦀⏱️ Crabtime
 //!
-//! **Eval Macro** introduces a new macro type for Rust, blending power and ease of use. Here’s how
+//! **Crabtime** introduces a new macro type for Rust, blending power and ease of use. Here’s how
 //! it compares to `macro_rules!` and procedural macros:
 //!
-//! |                              | Proc Macro        | Eval Macro                         | Macro Rules          |
+//! |                              | Proc Macro        | Crabtime                           | Macro Rules          |
 //! | :---                         | :---              | :---                               | :---                 |
 //! | **Input**                    | [Token Stream][1] | **Rust Code** or [Token Stream][1] | [Macro Fragments][2] |
 //! | **Output**                   | [Token Stream][1] | **Rust Code** or [Token Stream][1] | [Macro Fragments][2] |
 //! | **Advanced transformations** | ✅                | ✅                                 | ❌                   |
 //! | **Easy to define**           | ❌                | ✅                                 | ✅                   |
 //! | **Easy to read**             | ❌                | ✅                                 | ✅                   |
-//! | **Reusable**                 | ✅                | ❌                                 | ✅                   |
+//! | **Reusable**                 | ✅                | ✅                                 | ✅                   |
+//! | Can define fn-like macros    | ✅                | ✅                                 | ✅                   |
+//! | Can define derive macros     | ✅                | ⚠️                                 | ❌                   |
+//! | Can define attribute macros  | ✅                | ⚠️                                 | ❌                   |
 //! | **Hygienic**                 | ❌                | ❌                                 | ✅                   |
 //!
 //! [1]: https://doc.rust-lang.org/proc_macro/struct.TokenStream.html
 //! [2]: https://doc.rust-lang.org/reference/macros-by-example.html#metavariables
 //!
-//! In short, Eval Macros provide even greater flexibility and power than procedural macros, while
+//! In short, Crabtime macro provide even greater flexibility and power than procedural macros, while
 //! preserving the simplicity of `macro_rules!` macros. However, they are not reusable — you cannot
-//! export an Eval Macro for use in other crates.
+//! export an Crabtime for use in other crates.
 //!
 //! <br/>
 //! <br/>
 //!
 //! # 🤩 Syntax
 //!
-//! Use the `eval!` macro to create and run an Eval Macro inline. The content of the macro is
+//! Use the `eval!` macro to create and run an Crabtime macro inline. The content of the macro is
 //! regular Rust code, which will be compiled and executed at build time. Inside the `eval!`
 //! block, you can use the `output!` macro to emit Rust code. `output!` supports double-brace
 //! interpolation, allowing you to embed variables directly into the generated code.
@@ -38,7 +41,7 @@
 //! Example:
 //!
 //! ```
-//! use eval_macro::eval;
+//! use crabtime::eval;
 //!
 //! eval! {
 //!     let components = ["X", "Y", "Z", "W"];
@@ -139,7 +142,7 @@
 //! calculations:
 //!
 //! ```
-//! use eval_macro::eval;
+//! use crabtime::eval;
 //!
 //! const MY_NUM: usize = eval! { (std::f32::consts::PI.sqrt() * 10.0).round() as usize };
 //! # fn main() {}
@@ -252,7 +255,7 @@
 //! Example:
 //!
 //! ```rust
-//! use eval_macro::eval;
+//! use crabtime::eval;
 //!
 //! eval! {
 //!     #![edition(2024)]
@@ -281,7 +284,7 @@
 //! similar to how procedural macros operate — but with the flexibility of the `eval!` environment.
 //!
 //! ```
-//! use eval_macro::eval;
+//! use crabtime::eval;
 //!
 //! eval! {
 //!     #![dependency(proc-macro2 = "1")]
@@ -330,7 +333,7 @@
 //! so this:
 //!
 //! ```
-//! use eval_macro::eval;
+//! use crabtime::eval;
 //!
 //! eval! {
 //!     let components = ["X", "Y", "Z", "W"];
@@ -350,7 +353,7 @@
 //! Is equivalent to:
 //!
 //! ```
-//! use eval_macro::eval;
+//! use crabtime::eval;
 //!
 //! eval! {
 //!     let components = ["X", "Y", "Z", "W"];
@@ -371,7 +374,7 @@
 //! And that, in turn, is just shorthand for:
 //!
 //! ```
-//! use eval_macro::eval;
+//! use crabtime::eval;
 //!
 //! eval! {
 //!     let components = ["X", "Y", "Z", "W"];
@@ -393,7 +396,7 @@
 //! Which, ultimately, is equivalent to:
 //!
 //! ```
-//! use eval_macro::eval;
+//! use crabtime::eval;
 //!
 //! eval! {
 //!     let components = ["X", "Y", "Z", "W"];
@@ -420,4 +423,4 @@
 //! syntax described above. If you encounter issues, please
 //! [open an issue](https://github.com/wdanilo/eval-macro/issues) to let us know!
 
-pub use eval_macro_internal::*;
+pub use crabtime_internal::*;

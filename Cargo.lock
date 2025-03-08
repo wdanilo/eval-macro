@@ -3,21 +3,15 @@
 version = 4
 
 [[package]]
-name = "equivalent"
-version = "1.0.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "877a4ace8713b0bcf2a4e7eec82529c029f1d0619886d18145fea96c3ffe5c0f"
-
-[[package]]
-name = "eval-macro"
-version = "0.5.0"
+name = "crabtime"
+version = "0.6.0"
 dependencies = [
- "eval-macro-internal",
+ "crabtime-internal",
 ]
 
 [[package]]
-name = "eval-macro-internal"
-version = "0.5.0"
+name = "crabtime-internal"
+version = "0.6.0"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -25,6 +19,12 @@ dependencies = [
  "syn",
  "toml",
 ]
+
+[[package]]
+name = "equivalent"
+version = "1.0.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "877a4ace8713b0bcf2a4e7eec82529c029f1d0619886d18145fea96c3ffe5c0f"
 
 [[package]]
 name = "hashbrown"

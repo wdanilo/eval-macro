@@ -385,9 +385,10 @@ impl CargoConfig {
     }
 }
 
-fn create_project_skeleton(project_dir: &Path, cfg: CargoConfig, main_content: &str) -> Result {
+fn create_project_skeleton(project_dir: &Path, cfg: CargoConfig, main: &str) -> Result<bool> {
     let src_dir = project_dir.join("src");
-    if !src_dir.exists() {
+    let existed = src_dir.exists();
+    if !existed {
         fs::create_dir_all(&src_dir).context("Failed to create src directory.")?;
     }
 
@@ -397,7 +398,8 @@ fn create_project_skeleton(project_dir: &Path, cfg: CargoConfig, main_content: &
 
     let main_rs = src_dir.join("main.rs");
     let mut file = File::create(&main_rs).context("Failed to create main.rs")?;
-    file.write_all(main_content.as_bytes()).context("Failed to write main.rs")
+    file.write_all(main.as_bytes()).context("Failed to write main.rs")?;
+    Ok(existed)
 }
 
 fn get_host_target() -> Result<String> {
@@ -429,8 +431,10 @@ fn run_cargo_project(project_dir: &PathBuf) -> Result<String> {
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        // eprintln!("{stderr}"); // FIXME: Do we need that?
-        err!("Cargo project failed to compile or run: {stderr}")
+        // Printing original error.
+        // TODO: Parse it and map gen code spans to call site spans.
+        eprintln!("{stderr}");
+        err!("Compilation of the generated code failed.")
     } else {
         Ok(String::from_utf8_lossy(&output.stdout).to_string())
     }
@@ -593,7 +597,6 @@ fn print_tokens_internal(tokens: &TokenStream) -> PrintOutput {
 // === Eval Macro ===
 // ==================
 
-
 fn extract_pattern(
     args: &syn::punctuated::Punctuated<syn::FnArg, syn::token::Comma>
 ) -> Option<String> {
@@ -645,58 +648,66 @@ fn parse_output(output: &str) -> String {
     code
 }
 
+/// Function-like macro generation.
 #[proc_macro_attribute]
-pub fn eval(
+pub fn function(
     attr: proc_macro::TokenStream,
     item: proc_macro::TokenStream
 ) -> proc_macro::TokenStream {
     // SAFETY: Used to panic in case of error.
     #[allow(clippy::unwrap_used)]
-    eval_impl(attr, item).unwrap_or_compile_error().into()
+    function_impl(attr, item).unwrap_or_compile_error().into()
 }
 
-fn eval_impl(
+fn function_impl(
     _attr: proc_macro::TokenStream,
     item: proc_macro::TokenStream
 ) -> Result<TokenStream> {
+    let start_time = get_current_time();
+    let timer = std::time::Instant::now();
+
     let input_fn = syn::parse::<syn::ItemFn>(item)?;
     let name = &input_fn.sig.ident.to_string();
     let args = &input_fn.sig.inputs;
     let body = &input_fn.block.stmts;
 
     if args.len() > 1 { return err!("{WRONG_ARGS}"); }
-
-    let mut cfg = CargoConfig::default();
-
     let input_pattern = extract_pattern(&args).context(|| error!(WRONG_ARGS))?;
     let input_str = expand_output_macro(quote!{ #(#body)* }).to_string();
     let paths = Paths::new(name, &input_str)?;
+    debug!("REWRITTEN INPUT: {input_str}");
 
+    let mut cfg = CargoConfig::default();
     if let Some(path) = &paths.cargo_toml_path {
         cfg.fill_from_cargo_toml(path)?;
     }
     let attributes = cfg.extract_inline_attributes(input_fn.attrs)?;
-
-    debug!("REWRITTEN INPUT: {input_str}");
-
     let input_code = prepare_input_code(&attributes, &input_str);
-    let output = paths.with_output_dir(|output_dir| {
+    let (output, was_cached) = paths.with_output_dir(|output_dir| {
         debug!("OUTPUT_DIR: {:?}", output_dir);
-        create_project_skeleton(&output_dir, cfg, &input_code)?;
-        run_cargo_project(&output_dir)
+        let was_cached = create_project_skeleton(&output_dir, cfg, &input_code)?;
+        let output = run_cargo_project(&output_dir)?;
+        Ok((output, was_cached))
     })?;
 
     let output_code = parse_output(&output);
+    let duration = format_duration(timer.elapsed());
     let macro_code = format!("
+        /// # Compilation Stats
+        /// Start: {start_time}
+        /// Duration: {duration}
+        /// Cached: {was_cached}
+        ///
+        /// Dummy function used to prevent duplicate names in the same module.
+        fn {CRATE}_{name}() {{}}
+
         macro_rules! {name} {{
             ({input_pattern}) => {{
                {output_code}
             }}
         }}
     ");
-
     debug!("BODY: {macro_code}");
-
     let out: TokenStream = macro_code.parse()
         .map_err(|err| error!("{err:?}"))
         .context("Failed to parse generated code.")?;
@@ -704,10 +715,35 @@ fn eval_impl(
     Ok(out)
 }
 
+fn format_duration(duration: std::time::Duration) -> String {
+    let total_seconds = duration.as_secs();
+    if total_seconds >= 60 {
+        let minutes = total_seconds / 60;
+        let seconds = total_seconds % 60;
+        format!("{}m {}s", minutes, seconds)
+    } else {
+        let millis = duration.as_millis() % 1000;
+        let fractional = millis as f64 / 1000.0;
+        format!("{:.2} s", total_seconds as f64 + fractional)
+    }
+}
+
+fn get_current_time() -> String {
+    let now = std::time::SystemTime::now();
+    #[allow(clippy::unwrap_used)]
+    let duration_since_epoch = now.duration_since(std::time::UNIX_EPOCH).unwrap();
+    let total_seconds = duration_since_epoch.as_secs();
+    let milliseconds = (duration_since_epoch.as_millis() % 1000) as u32;
+    let hours = (total_seconds / 3600) % 24;
+    let minutes = (total_seconds / 60) % 60;
+    let seconds = total_seconds % 60;
+    format!("{hours:02}:{minutes:02}:{seconds:02} ({milliseconds:03})")
+}
+
 
 // TODO: get lints from Cargo
 // TODO: support workspaces, for edition and dependencies or is it done automatically for edition?
-
+// TODO: macro export
 // TODO:
 //     crabtime::rules! {
 //         test (input: TokenStream) => {

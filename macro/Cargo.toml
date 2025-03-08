@@ -1,9 +1,9 @@
 [package]
-name = "eval-macro-internal"
-version = "0.5.0"
+name = "crabtime-internal"
+version = "0.6.0"
 authors = ["Wojciech Danilo <wojciech.danilo@gmail.com>"]
 edition = { workspace = true }
-description = "Helper for the eval-macro crate."
+description = "Helper for the crabtime crate."
 keywords = ["macros"]
 license = "MIT OR Apache-2.0"
 
