@@ -239,8 +239,7 @@ impl Paths {
 
     fn with_output_dir<T>(&self, f: impl FnOnce(&PathBuf) -> Result<T>) -> Result<T> {
         if !self.output_dir.exists() {
-            fs::create_dir_all(&self.output_dir)
-                .context(|| error!("Failed to create project directory."))?;
+            fs::create_dir_all(&self.output_dir).context("Failed to create project directory.")?;
         }
         let out = f(&self.output_dir);
         // We cache projects on nightly. On stable, the project name is based on the input code.
@@ -361,7 +360,7 @@ impl CargoConfig {
         let mut other_attributes = Vec::with_capacity(attributes.len());
         let mut new_dependencies = vec![];
         for attr in attributes {
-            let tokens = attr.parse_args::<TokenStream>().context(|| error!("Failed to parse attributes"))?;
+            let tokens = attr.parse_args::<TokenStream>().context("Failed to parse attributes")?;
             let tokens_str = tokens.to_string().replace(" ", "");
             let token_range = tokens.clone().into_iter().next()
                 .zip(tokens.clone().into_iter().last())
@@ -389,16 +388,16 @@ impl CargoConfig {
 fn create_project_skeleton(project_dir: &Path, cfg: CargoConfig, main_content: &str) -> Result {
     let src_dir = project_dir.join("src");
     if !src_dir.exists() {
-        fs::create_dir_all(&src_dir).context(|| error!("Failed to create src directory."))?;
+        fs::create_dir_all(&src_dir).context("Failed to create src directory.")?;
     }
 
     let cargo_toml = project_dir.join("Cargo.toml");
     let cargo_toml_content = cfg.print();
-    fs::write(&cargo_toml, cargo_toml_content).context(|| error!("Failed to write Cargo.toml."))?;
+    fs::write(&cargo_toml, cargo_toml_content).context("Failed to write Cargo.toml.")?;
 
     let main_rs = src_dir.join("main.rs");
-    let mut file = File::create(&main_rs).context(|| error!("Failed to create main.rs"))?;
-    file.write_all(main_content.as_bytes()).context(|| error!("Failed to write main.rs"))
+    let mut file = File::create(&main_rs).context("Failed to create main.rs")?;
+    file.write_all(main_content.as_bytes()).context("Failed to write main.rs")
 }
 
 fn get_host_target() -> Result<String> {
@@ -406,7 +405,7 @@ fn get_host_target() -> Result<String> {
         .arg("-vV")
         .stdout(std::process::Stdio::piped())
         .output()
-        .context(|| error!("Failed to run rustc"))?;
+        .context("Failed to run rustc")?;
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     for line in stdout.lines() {
@@ -426,7 +425,7 @@ fn run_cargo_project(project_dir: &PathBuf) -> Result<String> {
         .arg(&host_target)
         .current_dir(project_dir)
         .output()
-        .context(|| error!("Failed to execute cargo run"))?;
+        .context("Failed to execute cargo run")?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -669,7 +668,7 @@ fn eval_impl(
 
     let mut cfg = CargoConfig::default();
 
-    let input_pattern = extract_pattern(&args).context(|| error!("{}", WRONG_ARGS))?;
+    let input_pattern = extract_pattern(&args).context(|| error!(WRONG_ARGS))?;
     let input_str = expand_output_macro(quote!{ #(#body)* }).to_string();
     let paths = Paths::new(name, &input_str)?;
 
@@ -700,7 +699,7 @@ fn eval_impl(
 
     let out: TokenStream = macro_code.parse()
         .map_err(|err| error!("{err:?}"))
-        .context(|| error!("Failed to parse generated code."))?;
+        .context("Failed to parse generated code.")?;
     debug!("OUTPUT : {out}");
     Ok(out)
 }

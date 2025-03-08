@@ -1,7 +1,6 @@
 use std::fmt::Debug;
 use proc_macro2::Span;
 use proc_macro2::TokenStream;
-use quote::ToTokens;
 
 // =============
 // === Level ===
@@ -131,25 +130,46 @@ pub(crate) use err;
 // === Context ===
 // ===============
 
-pub(crate) trait Context<T> {
-    fn context(self, f: impl FnOnce() -> Issue) -> Result<T>;
+pub(crate) trait Context<T, I> {
+    fn context(self, issue: I) -> Result<T>;
 }
 
-impl<T> Context<T> for Result<T, Issue> {
-    fn context(self, f: impl FnOnce() -> Issue) -> Result<T> {
-        self.map_err(|e| e.context(f))
+impl<T, I> Context<T, I> for Result<T, Issue> where
+I: FnOnce() -> Issue {
+    fn context(self, issue: I) -> Result<T> {
+        self.map_err(|e| e.context(issue))
     }
 }
 
-impl<T, E: Debug> Context<T> for Result<T, E> {
-    fn context(self, f: impl FnOnce() -> Issue) -> Result<T> {
-        self.map_err(|e| Issue::from(e)).context(f)
+impl<T> Context<T, &'static str> for Result<T, Issue> {
+    fn context(self, issue: &'static str) -> Result<T> {
+        self.context(|| error!("{}", issue))
     }
 }
 
-impl<T> Context<T> for Option<T> {
-    fn context(self, f: impl FnOnce() -> Issue) -> Result<T> {
-        self.ok_or_else(|| f())
+impl<T, E: Debug, I> Context<T, I> for Result<T, E> where
+I: FnOnce() -> Issue {
+    fn context(self, issue: I) -> Result<T> {
+        self.map_err(|e| Issue::from(e)).context(issue)
+    }
+}
+
+impl<T, E: Debug> Context<T, &'static str> for Result<T, E> {
+    fn context(self, issue: &'static str) -> Result<T> {
+        self.context(|| error!("{}", issue))
+    }
+}
+
+impl<T, I> Context<T, I> for Option<T> where
+I: FnOnce() -> Issue {
+    fn context(self, issue: I) -> Result<T> {
+        self.ok_or_else(|| issue())
+    }
+}
+
+impl<T> Context<T, &'static str> for Option<T> {
+    fn context(self, issue: &'static str) -> Result<T> {
+        self.context(|| error!("{}", issue))
     }
 }
 
