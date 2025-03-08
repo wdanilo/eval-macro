@@ -5,36 +5,66 @@
 //!
 //! # 🦀⏱️ Crabtime
 //!
-//! **Crabtime** introduces a new macro type for Rust, blending power and ease of use. Here’s how
-//! it compares to `macro_rules!` and procedural macros:
+//! **Crabtime** introduces a new way to write Rust macros in a similar spirit to [Zig's comptime](...).
+//! It provides even greater flexibility and power than procedural macros, yet it is easy and natural to
+//! read and write. Below you can find the comparison of the most important aspects of Rust macro systems:
 //!
-//! |                              | Proc Macro        | Crabtime                           | Macro Rules          |
-//! | :---                         | :---              | :---                               | :---                 |
-//! | **Input**                    | [Token Stream][1] | **Rust Code** or [Token Stream][1] | [Macro Fragments][2] |
-//! | **Output**                   | [Token Stream][1] | **Rust Code** or [Token Stream][1] | [Macro Fragments][2] |
-//! | **Advanced transformations** | ✅                | ✅                                 | ❌                   |
-//! | **Easy to define**           | ❌                | ✅                                 | ✅                   |
-//! | **Easy to read**             | ❌                | ✅                                 | ✅                   |
-//! | **Reusable**                 | ✅                | ✅                                 | ✅                   |
-//! | Can define fn-like macros    | ✅                | ✅                                 | ✅                   |
-//! | Can define derive macros     | ✅                | ⚠️                                 | ❌                   |
-//! | Can define attribute macros  | ✅                | ⚠️                                 | ❌                   |
-//! | **Hygienic**                 | ❌                | ❌                                 | ✅                   |
+//! |                                          | Proc Macro | Crabtime | Macro Rules |
+//! | :---                                     | :---       | :---     | :---        |
+//! | Input as [Token Stream][1]               | ✅         | ✅       | ❌          |
+//! | Input as [Macro Fragments][2]            | ❌         | ✅       | ✅          |
+//! | Input as Rust Code (String)              | ❌         | ✅       | ❌          |
+//! | Output as [Token Stream][1]              | ✅         | ✅       | ❌          |
+//! | Output as [Macro Fragments Template][2]  | ❌         | ✅       | ✅          |
+//! | Output as Rust Code (String)             | ❌         | ✅       | ❌          |
+//! | Advanced transformations                 | ✅         | ✅       | ❌          |
+//! | Easy to define (inline, the same crate)  | ❌         | ✅       | ✅          |
+//! | Easy to read                             | ❌         | ✅       | ⚠️          |
+//! | [Space-aware interpolation](...)         | ❌         | ✅       | ❌          |
+//! | Reusable across modules and crates       | ✅         | ✅       | ✅          |
+//! | Can define [fn-like macros](...)         | ✅         | ✅       | ✅          |
+//! | Can define [derive macros](...)          | ✅         | 🚧       | ❌          |
+//! | Can define [attribute macros](...)       | ✅         | 🚧       | ❌          |
+//! | [Hygienic](...)                          | ❌         | ❌       | ✅          |
+//! | Works with [rustfmt](...)                | ✅         | ✅       | ❌          |
+//! | Provides code hints in IDEs              | ✅         | ✅       | ❌          |
 //!
 //! [1]: https://doc.rust-lang.org/proc_macro/struct.TokenStream.html
 //! [2]: https://doc.rust-lang.org/reference/macros-by-example.html#metavariables
 //!
-//! In short, Crabtime macro provide even greater flexibility and power than procedural macros, while
-//! preserving the simplicity of `macro_rules!` macros. However, they are not reusable — you cannot
-//! export an Crabtime for use in other crates.
-//!
 //! <br/>
 //! <br/>
 //!
-//! # 🤩 Syntax
+//! # 🤩 Defining new function-like macros
 //!
-//! Use the `eval!` macro to create and run an Crabtime macro inline. The content of the macro is
-//! regular Rust code, which will be compiled and executed at build time. Inside the `eval!`
+//! Use the `crabtime::function` attribute to define a new [function-like macro](...). The body of
+//! the macro is a regular Rust code, which will be compiled and executed at build time. To output
+//! code from the macro, you can use one of the following methods.
+//!
+//! ### String Output
+//!
+//! ```
+//! #[crabtime::function]
+//! fn gen() {
+//!     let components = ["X", "Y", "Z", "W"];
+//!     components.iter().enumerate().map(|(ix, name)| {
+//!         let dim = ix + 1;
+//!         let cons = components[0..dim].join(",");
+//!         format!("enum Position{ix} {{ {cons} }}")
+//!     }).collect::<Vec<_>>.join("\n")
+//! }
+//! # fn main() {}
+//! ```
+//!
+//!
+//! - Return [TokenTree] from the function.
+//! - Use `crabtime::output` function.
+//! - Use the `output!` macro, which supports double-brace space-sensitive interpolation, allowing
+//!   you to embed variables directly into the generated code.
+//! -
+//!
+//!
+//! Inside the `eval!`
 //! block, you can use the `output!` macro to emit Rust code. `output!` supports double-brace
 //! interpolation, allowing you to embed variables directly into the generated code.
 //!

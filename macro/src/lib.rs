@@ -17,6 +17,7 @@ use std::io::Write;
 use std::path::Path;
 use std::path::PathBuf;
 use std::process::Command;
+use std::default::Default;
 
 #[cfg(not(nightly))]
 mod non_nightly_deps {
@@ -121,15 +122,30 @@ fn gen_prelude() -> String {
 }
 
 const PRELUDE_STATIC: &str = "
-    pub(super) fn push_as_str<T: std::fmt::Debug>(str: &mut String, value: &T) {
-        let repr = format!(\"{value:?}\");
-        if repr != \"()\" {
-            if repr.starts_with(\"(\") && repr.ends_with(\")\") {
-                str.push_str(&repr[1..repr.len() - 1]);
-            } else {
-                str.push_str(&repr);
-            }
+    pub(super) trait CodeFromOutput {
+        fn code_from_output(output: Self) -> String;
+    }
+
+    impl CodeFromOutput for () {
+        fn code_from_output(_output: Self) -> String {
+            String::new()
         }
+    }
+
+    impl<'t> CodeFromOutput for &'t str {
+        fn code_from_output(output: Self) -> String {
+            output.to_string()
+        }
+    }
+
+    impl CodeFromOutput for String {
+        fn code_from_output(output: Self) -> String {
+            output
+        }
+    }
+
+    pub(super) fn code_from_output<T: CodeFromOutput>(output: T) -> String {
+        <T as CodeFromOutput>::code_from_output(output)
     }
 
     pub(super) fn prefix_lines_with(prefix: &str, input: &str) -> String {
@@ -597,17 +613,58 @@ fn print_tokens_internal(tokens: &TokenStream) -> PrintOutput {
 // === Eval Macro ===
 // ==================
 
-fn extract_pattern(
-    args: &syn::punctuated::Punctuated<syn::FnArg, syn::token::Comma>
-) -> Option<String> {
-    let Some(arg) = args.first() else { return Some(String::new()) };
-    let syn::FnArg::Typed(pat) = arg else { return None };
-    let syn::Pat::Macro(m) = &*pat.pat else { return None };
-    Some(m.mac.tokens.to_string())
+enum Args {
+    TokenTree { ident: syn::Ident },
+    Pattern { str: String }
 }
 
-const WRONG_ARGS: &str = "Function should have at most one argument of the form \
-    `pattern!(<pattern>):_`, where <pattern> is a `macro_rules!` pattern.";
+impl Args {
+    fn pattern(&self) -> String {
+        match self {
+            Self::TokenTree { .. } => Default::default(),
+            Self::Pattern { str } => str.clone(),
+        }
+    }
+
+    fn setup(&self) -> String {
+        if let Self::TokenTree { ident } = self {
+            format!("
+                use proc_macro2::TokenStream;
+                let {ident}: TokenStream = SOURCE_CODE.parse().unwrap();
+            ")
+        } else {
+            Default::default()
+        }
+    }
+}
+
+fn parse_args(
+    args: &syn::punctuated::Punctuated<syn::FnArg, syn::token::Comma>
+) -> Option<Args> {
+    let Some(arg) = args.first() else { return Some(Args::Pattern { str: String::new() }) };
+    parse_args_for_pattern(arg).or_else(|| parse_args_for_token_tree(arg))
+}
+
+fn parse_args_for_pattern(arg: &syn::FnArg) -> Option<Args> {
+    let syn::FnArg::Typed(pat) = arg else { return None };
+    let syn::Pat::Macro(m) = &*pat.pat else { return None };
+    Some(Args::Pattern {str: m.mac.tokens.to_string() })
+}
+
+fn parse_args_for_token_tree(arg: &syn::FnArg) -> Option<Args> {
+    let syn::FnArg::Typed(pat) = arg else { return None };
+    let syn::Pat::Ident(pat_ident) = &*pat.pat else { return None };
+    let tp = &pat.ty;
+    let tp_str = quote! { #tp }.to_string();
+    if tp_str != "TokenStream" { return None }
+    let ident = pat_ident.ident.clone();
+    Some(Args::TokenTree { ident })
+}
+
+const WRONG_ARGS: &str = "Function should have zero or one argument, one of:
+    - `pattern!(<pattern>): _`, where <pattern> is a `macro_rules!` pattern
+    - `input: TokenStream`
+";
 
 
 fn prepare_input_code(attributes:&str, body: &str) -> String {
@@ -624,7 +681,7 @@ fn prepare_input_code(attributes:&str, body: &str) -> String {
             let result = {{
                 {body}
             }};
-            {GEN_MOD}::push_as_str(&mut __output_buffer__, &result);
+            __output_buffer__.push_str(&{GEN_MOD}::code_from_output(result));
             println!(\"{{}}\", {GEN_MOD}::prefix_lines_with_output(&__output_buffer__));
         }}",
     )
@@ -666,22 +723,26 @@ fn function_impl(
     let start_time = get_current_time();
     let timer = std::time::Instant::now();
 
-    let input_fn = syn::parse::<syn::ItemFn>(item)?;
-    let name = &input_fn.sig.ident.to_string();
-    let args = &input_fn.sig.inputs;
-    let body = &input_fn.block.stmts;
+    let input_fn_ast = syn::parse::<syn::ItemFn>(item)?;
+    let name = &input_fn_ast.sig.ident.to_string();
+    let args_ast = &input_fn_ast.sig.inputs;
+    let body_ast = &input_fn_ast.block.stmts;
 
-    if args.len() > 1 { return err!("{WRONG_ARGS}"); }
-    let input_pattern = extract_pattern(&args).context(|| error!(WRONG_ARGS))?;
-    let input_str = expand_output_macro(quote!{ #(#body)* }).to_string();
+    if args_ast.len() > 1 { return err!("{WRONG_ARGS}"); }
+    let args = parse_args(&args_ast).context(|| error!(WRONG_ARGS))?;
+    let args_pattern = args.pattern();
+    let args_setup = args.setup();
+    let input_str = expand_output_macro(quote!{ #(#body_ast)* }).to_string();
+    let input_str = format!("{args_setup}\n{input_str}");
     let paths = Paths::new(name, &input_str)?;
     debug!("REWRITTEN INPUT: {input_str}");
+
 
     let mut cfg = CargoConfig::default();
     if let Some(path) = &paths.cargo_toml_path {
         cfg.fill_from_cargo_toml(path)?;
     }
-    let attributes = cfg.extract_inline_attributes(input_fn.attrs)?;
+    let attributes = cfg.extract_inline_attributes(input_fn_ast.attrs)?;
     let input_code = prepare_input_code(&attributes, &input_str);
     let (output, was_cached) = paths.with_output_dir(|output_dir| {
         debug!("OUTPUT_DIR: {:?}", output_dir);
@@ -702,9 +763,9 @@ fn function_impl(
         fn {CRATE}_{name}() {{}}
 
         macro_rules! {name} {{
-            ({input_pattern}) => {{
+            ({args_pattern}) => {{
                {output_code}
-            }}
+            }};
         }}
     ");
     debug!("BODY: {macro_code}");
