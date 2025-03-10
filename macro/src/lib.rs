@@ -525,8 +525,40 @@ fn run_cargo_project(project_dir: &PathBuf) -> Result<String> {
 /// Find and expand the `output!` macro in the input `TokenStream`. After this lib stabilizes, this
 /// should be rewritten to standard macro and imported by the generated code.
 
+fn expand_arg_macro(input: TokenStream) -> TokenStream {
+    let tokens: Vec<TokenTree> = input.into_iter().collect();
+    let mut output = TokenStream::new();
+    let mut i = 0;
+    while i < tokens.len() {
+        if let TokenTree::Ident(ref ident) = tokens[i] {
+            if *ident == "arg" && i + 1 < tokens.len() {
+                if let TokenTree::Punct(ref excl) = tokens[i + 1] {
+                    if excl.as_char() == '!' && i + 2 < tokens.len() {
+                        if let TokenTree::Group(ref group) = tokens[i + 2] {
+                            output.extend(group.stream());
+                            i += 3;
+                            continue;
+                        }
+                    }
+                }
+            }
+        }
+        match &tokens[i] {
+            TokenTree::Group(group) => {
+                let new_stream = expand_arg_macro(group.stream());
+                let new_group = TokenTree::Group(proc_macro2::Group::new(group.delimiter(), new_stream));
+                output.extend(std::iter::once(new_group));
+            }
+            _ => {
+                output.extend(std::iter::once(tokens[i].clone()));
+            }
+        }
+        i += 1;
+    }
+    output
+}
+
 fn expand_builtin_macro(name: &str, input: TokenStream, f: &impl Fn(TokenStream) -> TokenStream) -> TokenStream {
-    let gen_mod = syn::Ident::new(GEN_MOD, Span::call_site());
     let tokens: Vec<TokenTree> = input.into_iter().collect();
     let mut output = TokenStream::new();
     let len = tokens.len();
@@ -983,6 +1015,163 @@ fn function_impl(
         .context("Failed to parse generated code.")?;
     debug!("OUTPUT : {out}");
     Ok(out)
+}
+
+#[proc_macro_attribute]
+pub fn function3(
+    attr: proc_macro::TokenStream,
+    item: proc_macro::TokenStream
+) -> proc_macro::TokenStream {
+    // SAFETY: Used to panic in case of error.
+    #[allow(clippy::unwrap_used)]
+    function3_impl(attr, item).unwrap_or_compile_error().into()
+}
+
+
+fn function3_impl(
+    attr: proc_macro::TokenStream,
+    item: proc_macro::TokenStream
+) -> Result<TokenStream> {
+    let options = syn::parse::<MacroOptions>(attr)?;
+    let start_time = get_current_time();
+    let timer = std::time::Instant::now();
+
+    let input_fn_ast = syn::parse::<syn::ItemFn>(item)?;
+    let name = &input_fn_ast.sig.ident.to_string();
+    let args_ast = &input_fn_ast.sig.inputs;
+    let body_ast = &input_fn_ast.block.stmts;
+
+    if args_ast.len() > 1 { return err!("{WRONG_ARGS}"); }
+    let args = parse_args(&args_ast).context(|| error!(WRONG_ARGS))?;
+    let args_pattern = args.pattern();
+    let args_setup = args.setup();
+    let input_str = expand_quote_macro(expand_output_macro(quote!{ #(#body_ast)* })).to_string();
+    let input_str = format!("{args_setup}\n{input_str}");
+    let paths = Paths::new(options, name, &input_str)?;
+    debug!("REWRITTEN INPUT: {input_str}");
+
+
+    let mut cfg = CargoConfig::default();
+    if let Some(path) = &paths.cargo_toml_path {
+        cfg.fill_from_cargo_toml(path)?;
+    }
+    let attributes = cfg.extract_inline_attributes(input_fn_ast.attrs)?;
+    let include_token_stream_impl = cfg.contains_dependency("proc-macro2");
+    let input_code = prepare_input_code(&attributes, &input_str, include_token_stream_impl);
+    let mut output_dir_str = String::new();
+    let (output, was_cached) = paths.with_output_dir(options.cache, |output_dir| {
+        debug!("OUTPUT_DIR: {:?}", output_dir);
+        output_dir_str = output_dir.to_string_lossy().to_string();
+        let was_cached = create_project_skeleton(&output_dir, cfg, &input_code)?;
+        let output = run_cargo_project(&output_dir)?;
+        Ok((output, was_cached))
+    })?;
+
+    let output_code = parse_output(&output);
+    let duration = format_duration(timer.elapsed());
+    let options_doc = format!("{options:#?}").replace("\n", "\n/// ");
+    let mut macro_code = format!("
+        /// # Compilation Stats
+        /// Start: {start_time}
+        /// Duration: {duration}
+        /// Cached: {was_cached}
+        /// Output Dir: {output_dir_str}
+        /// Macro Options: {options_doc}
+        const _: () = ();
+        {output_code}
+    ");
+    // if options.prevent_duplicate_names {
+    //     macro_code.push_str(&format!("
+    //         /// Dummy function used to prevent duplicate names in the same module.
+    //         fn {CRATE}_{name}() {{}}
+    //     "));
+    // }
+
+    debug!("BODY: {macro_code}");
+    let out: TokenStream = macro_code.parse()
+        .map_err(|err| error!("{err:?}"))
+        .context("Failed to parse generated code.")?;
+    debug!("OUTPUT : {out}");
+    Ok(out)
+}
+
+#[proc_macro_attribute]
+pub fn function2(
+    attr: proc_macro::TokenStream,
+    item: proc_macro::TokenStream
+) -> proc_macro::TokenStream {
+    // SAFETY: Used to panic in case of error.
+    #[allow(clippy::unwrap_used)]
+    function2_impl(attr, item).unwrap_or_compile_error().into()
+}
+fn function2_impl(
+    attr: proc_macro::TokenStream,
+    item: proc_macro::TokenStream
+) -> Result<TokenStream> {
+    // let options = syn::parse::<MacroOptions>(attr)?;
+    //
+    let input_fn_ast = syn::parse::<syn::ItemFn>(item)?;
+    let name = &input_fn_ast.sig.ident.to_string();
+    let args_ast = &input_fn_ast.sig.inputs;
+    let body_ast = &input_fn_ast.block.stmts;
+    //
+    if args_ast.len() > 1 { return err!("{WRONG_ARGS}"); }
+    let args = parse_args(&args_ast).context(|| error!(WRONG_ARGS))?;
+    let args_pattern = args.pattern();
+    // let args_setup = args.setup();
+    let input_str = expand_arg_macro(quote!{ #(#body_ast)* });
+    // let input_str = format!("{args_setup}\n{input_str}");
+    // let paths = Paths::new(options, name, &input_str)?;
+    // debug!("REWRITTEN INPUT: {input_str}");
+    //
+    //
+    // let mut cfg = CargoConfig::default();
+    // if let Some(path) = &paths.cargo_toml_path {
+    //     cfg.fill_from_cargo_toml(path)?;
+    // }
+    // let attributes = cfg.extract_inline_attributes(input_fn_ast.attrs)?;
+    // let include_token_stream_impl = cfg.contains_dependency("proc-macro2");
+    // let input_code = prepare_input_code(&attributes, &input_str, include_token_stream_impl);
+    // let mut output_dir_str = String::new();
+    // let (output, was_cached) = paths.with_output_dir(options.cache, |output_dir| {
+    //     debug!("OUTPUT_DIR: {:?}", output_dir);
+    //     output_dir_str = output_dir.to_string_lossy().to_string();
+    //     let was_cached = create_project_skeleton(&output_dir, cfg, &input_code)?;
+    //     let output = run_cargo_project(&output_dir)?;
+    //     Ok((output, was_cached))
+    // })?;
+    //
+    // let output_code = parse_output(&output);
+    // let duration = format_duration(timer.elapsed());
+    // let options_doc = format!("{options:#?}").replace("\n", "\n/// ");
+
+    // let body_code = quote!{ #(#body_ast)* };
+    let mut macro_code = format!("
+        macro_rules! {name} {{
+            ({args_pattern}) => {{
+                #[crabtime::function3]
+                fn {name}() {{
+                    {input_str}
+                }}
+            }};
+        }}
+    ");
+    // {output_code}
+    // if options.prevent_duplicate_names {
+    //     macro_code.push_str(&format!("
+    //         /// Dummy function used to prevent duplicate names in the same module.
+    //         fn {CRATE}_{name}() {{}}
+    //     "));
+    // }
+    //
+    // debug!("BODY: {macro_code}");
+    let out: TokenStream = macro_code.parse()
+        .map_err(|err| error!("{err:?}"))
+        .context("Failed to parse generated code.")?;
+    debug!("OUTPUT : {out}");
+    Ok(out)
+
+    // Ok(quote!{})
 }
 
 fn format_duration(duration: std::time::Duration) -> String {
