@@ -22,7 +22,6 @@ use std::error::Error;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::Hash;
 use std::hash::Hasher;
-
 use error::*;
 
 // =================
@@ -509,9 +508,11 @@ fn run_cargo_project(project_dir: &PathBuf) -> Result<String> {
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        // Printing original error.
         // TODO: Parse it and map gen code spans to call site spans.
         eprintln!("{stderr}");
+        if let Some(index) = stderr.find("thread 'main' panicked") {
+            panic!("{}", &stderr[index..]);
+        }
         err!("Compilation of the generated code failed.")
     } else {
         Ok(String::from_utf8_lossy(&output.stdout).to_string())
@@ -626,67 +627,9 @@ fn expand_quote_macro(input: TokenStream) -> TokenStream {
     expand_builtin_macro("quote", input, &|inner_rewritten| {
         let content_str = print_tokens(&inner_rewritten);
         let lit = syn::LitStr::new(&content_str, Span::call_site());
-        quote! { #lit }
+        quote! { format!(#lit) }
     })
 }
-
-// fn expand_output_macro(input: TokenStream) -> TokenStream {
-//     let gen_mod = syn::Ident::new(GEN_MOD, Span::call_site());
-//     let tokens: Vec<TokenTree> = input.into_iter().collect();
-//     let mut output = TokenStream::new();
-//     let len = tokens.len();
-//     let mut i = 0;
-//
-//     while i < len {
-//         // Check for the pattern: crabtime :: output ! ( group )
-//         if i + 5 < len {
-//             if let TokenTree::Ident(ref ident) = tokens[i] {
-//                 if ident == "crabtime" {
-//                     if let TokenTree::Punct(ref colon1) = tokens[i + 1] {
-//                         if colon1.as_char() == ':' {
-//                             if let TokenTree::Punct(ref colon2) = tokens[i + 2] {
-//                                 if colon2.as_char() == ':' {
-//                                     if let TokenTree::Ident(ref out_ident) = tokens[i + 3] {
-//                                         if out_ident == "output" {
-//                                             if let TokenTree::Punct(ref excl) = tokens[i + 4] {
-//                                                 if excl.as_char() == '!' {
-//                                                     if let TokenTree::Group(ref group) = tokens[i + 5] {
-//                                                         let inner_rewritten = expand_output_macro(group.stream());
-//                                                         let content_str = print_tokens(&inner_rewritten);
-//                                                         let lit = syn::LitStr::new(&content_str, Span::call_site());
-//                                                         let new_tokens = quote! {
-//                                                             #gen_mod::write_ln!(__output_buffer__, #lit);
-//                                                         };
-//                                                         output.extend(new_tokens);
-//                                                         i += 6;
-//                                                         continue;
-//                                                     }
-//                                                 }
-//                                             }
-//                                         }
-//                                     }
-//                                 }
-//                             }
-//                         }
-//                     }
-//                 }
-//             }
-//         }
-//
-//         // Recurse into groups or pass through token.
-//         match &tokens[i] {
-//             TokenTree::Group(group) => {
-//                 let new_stream = expand_output_macro(group.stream());
-//                 // Rebuild group with same delimiter.
-//                 let new_group = TokenTree::Group(proc_macro2::Group::new(group.delimiter(), new_stream));
-//                 output.extend(std::iter::once(new_group));
-//             }
-//             token => output.extend(std::iter::once(token.clone())),
-//         }
-//         i += 1;
-//     }
-//     output
-// }
 
 // =============
 // === Print ===
@@ -721,7 +664,91 @@ const SPACER: &str = "%%%";
 /// additional spacing around. This is probably not covering all the bugs. If there will be a bug
 /// report, this is the place to look at.
 fn print_tokens(tokens: &TokenStream) -> String {
-    print_tokens_internal(tokens).output.replace("{%%%", "{ %%%").replace("%%%}", "%%% }").replace(SPACER, "")
+    // print_tokens_internal(tokens).output.replace("{%%%", "{ %%%").replace("%%%}", "%%% }").replace(SPACER, "")
+    print_tokens_internal2(tokens).output.replace("{", "{{").replace("}", "}}").replace("{{{{", "{").replace("}}}}", "}")
+}
+
+fn print_tokens_internal2(tokens: &TokenStream) -> PrintOutput {
+    let token_vec: Vec<TokenTree> = tokens.clone().into_iter().collect();
+    let mut output = String::new();
+    let mut first_token_start = None;
+    let mut prev_token_end: Option<LineColumn> = None;
+    let mut prev_token_was_brace = false;
+    for (i, token) in token_vec.iter().enumerate() {
+        let mut add_space = true;
+        let mut token_start = token.span().start();
+        let mut token_end = token.span().end();
+        // let mut is_keyword = false;
+        let mut is_brace = false;
+        let token_str = match token {
+            TokenTree::Group(g) => {
+                let content = print_tokens_internal2(&g.stream());
+                let mut content_str = content.output;
+                content_str.pop();
+                let (open, close) = match g.delimiter() {
+                    Delimiter::Brace =>{
+                        is_brace = true;
+                        ("{", "}")
+                    },
+                    Delimiter::Parenthesis => ("(", ")"),
+                    Delimiter::Bracket => ("[", "]"),
+                    _ => ("", ""),
+                };
+
+                if let Some(content_first_token_start) = content.start_token {
+                    token_start.line = content_first_token_start.line;
+                    if content_first_token_start.column > 0 {
+                        token_start.column = content_first_token_start.column - 1;
+                    }
+                }
+                if let Some(content_end) = content.end_token {
+                    token_end.line = content_end.line;
+                    token_end.column = content_end.column + 1;
+                }
+
+                format!("{open}{content_str}{close}")
+            }
+            TokenTree::Ident(ident) => {
+                let str = ident.to_string();
+                // is_keyword = KEYWORDS.contains(&str.as_str());
+                str
+            },
+            TokenTree::Literal(lit) => lit.to_string(),
+            TokenTree::Punct(punct) => {
+                let str = punct.as_char().to_string();
+                if str == "'" {
+                    add_space = false;
+                }
+                str
+            },
+        };
+        debug!("{i}: [{token_start:?}-{token_end:?}] [{prev_token_end:?}]: {token}");
+
+        if is_brace || prev_token_was_brace {
+            if let Some(prev_token_end) = prev_token_end {
+                if prev_token_end.line == token_start.line && prev_token_end.column >= token_start.column {
+                    if output.ends_with(" ") {
+                        output.pop();
+                    }
+                }
+            }
+        }
+        prev_token_was_brace = is_brace;
+
+        // Pushing a space before and after keywords is for IntelliJ only. Their token spans are invalid.
+        output.push_str(&token_str);
+        if add_space {
+            output.push(' ');
+        }
+
+        first_token_start.get_or_insert(token_start);
+        prev_token_end = Some(token_end);
+    }
+    PrintOutput {
+        output,
+        start_token: first_token_start,
+        end_token: prev_token_end,
+    }
 }
 
 fn print_tokens_internal(tokens: &TokenStream) -> PrintOutput {
@@ -803,11 +830,11 @@ fn print_tokens_internal(tokens: &TokenStream) -> PrintOutput {
 
 enum Args {
     TokenStream { ident: syn::Ident },
-    Pattern { str: String }
+    Pattern { str: TokenStream }
 }
 
 impl Args {
-    fn pattern(&self) -> String {
+    fn pattern(&self) -> TokenStream {
         match self {
             Self::TokenStream { .. } => Default::default(),
             Self::Pattern { str } => str.clone(),
@@ -828,24 +855,25 @@ impl Args {
 
 fn parse_args(
     args: &syn::punctuated::Punctuated<syn::FnArg, syn::token::Comma>
-) -> Option<(Args, String)> {
+) -> Option<(Args, TokenStream)> {
     let Some(arg) = args.first() else {
-        return Some((Args::Pattern { str: String::new() }, String::new()))
+        return Some((Args::Pattern { str: Default::default() }, TokenStream::new()))
     };
 
     // First try the specialized parsers, then fallback to our generic type handling.
     parse_args_for_pattern(arg)
         .or_else(|| parse_args_for_token_stream(arg))
-        .map(|t| (t, String::new()))
+        .map(|t| (t, TokenStream::new()))
         .or_else(|| {
             let mut is_first = true;
-            let mut pat = String::new();
-            let mut code = String::new();
+            let mut pat = quote!{};
+            let mut code = TokenStream::new();
 
             for arg in args {
                 if !is_first {
-                    pat.push_str(", ");
-                    code.push_str("\n");
+                    pat = quote! {#pat, };
+                    // pat.push_str(", ");
+                    // code.push_str("\n");
                 }
                 is_first = false;
                 if let syn::FnArg::Typed(pat_type) = arg {
@@ -853,26 +881,34 @@ fn parse_args(
                         let name_str = name.ident.to_string();
                         let ty = &*pat_type.ty;
                         let ty_str = quote! { #ty }.to_string();
-                        code.push_str(&format!("let mut {name_str}: {ty_str} = ("));
+                        code = quote! {
+                            #code
+                            let #name: #ty =
+                        };
+                        // code.push_str(&format!("let {name_str}: {ty_str} = ("));
 
                         // Use our helper to determine the pattern and code for the type.
                         if let Some((param_pat, param_code)) = parse_arg_type(&name_str, ty) {
-                            pat.push_str(&param_pat);
-                            code.push_str(&param_code);
+                            pat = quote! {#pat #param_pat};
+                            code = quote! {#code #param_code};
+                            // pat.push_str(&param_pat);
+                            // code.push_str(&param_code);
                         }
-                        code.push_str(");");
+                        // code.push_str(");");
+                        code = quote! {#code;};
                     }
                 }
                 println!("!!!!!!!!!!!!!!!!!!\nPAT: '{}'\nCODE: '{}'", pat, code);
             }
-            pat.push_str("$(,)?");
+            pat = quote! {#pat $(,)?};
+            // pat.push_str("$(,)?");
             Some((Args::Pattern { str: pat }, code))
         })
 }
 
 /// Returns (pattern, code) for a given type. It supports both vector types and non‑vector types.
 #[inline(always)]
-fn parse_arg_type(pfx: &str, ty: &syn::Type) -> Option<(String, String)> {
+fn parse_arg_type(pfx: &str, ty: &syn::Type) -> Option<(TokenStream, TokenStream)> {
     if let syn::Type::Path(type_path) = ty {
         let last_segment = type_path.path.segments.last()?;
         // If the type is Vec<T>, process T and then wrap the results in vector syntax.
@@ -881,8 +917,10 @@ fn parse_arg_type(pfx: &str, ty: &syn::Type) -> Option<(String, String)> {
                 let generic_arg = angle_bracketed.args.first()?;
                 if let syn::GenericArgument::Type(inner_ty) = generic_arg {
                     if let Some((inner_pat, inner_code)) = parse_inner_type(pfx, inner_ty) {
-                        let pat = format!("[$({}),*$(,)?]", inner_pat);
-                        let code = format!("[$({}),*].into_iter().collect()", inner_code);
+                        // let pat = format!("[$({}),*$(,)?]", inner_pat);
+                        let pat = quote! {[$(#inner_pat),*$(,)?]};
+                        // let code = format!("[$({}),*].into_iter().collect()", inner_code);
+                        let code = quote! { [$(#inner_code),*].into_iter().collect() };
                         return Some((pat, code));
                     }
                 }
@@ -900,15 +938,16 @@ fn parse_arg_type(pfx: &str, ty: &syn::Type) -> Option<(String, String)> {
 /// - Owned strings (String): yields pattern `"$arg:expr"` and code `"$arg.to_string()"`
 /// - Integers (e.g. usize, u8, i32, etc.): yields pattern `"$arg:literal"` and code `"$arg"`
 #[inline(always)]
-fn parse_inner_type(pfx: &str, ty: &syn::Type) -> Option<(String, String)> {
-    let arg = format!("${pfx}_arg");
+fn parse_inner_type(pfx: &str, ty: &syn::Type) -> Option<(TokenStream, TokenStream)> {
+    let arg_str = format!("${pfx}_arg");
+    let arg = syn::Ident::new(&arg_str, Span::call_site());
     match ty {
         // Match references, e.g. &str (with or without an explicit 'static lifetime)
         syn::Type::Reference(ty_ref) => {
             if let syn::Type::Path(inner_path) = &*ty_ref.elem {
                 if let Some(inner_seg) = inner_path.path.segments.last() {
                     if inner_seg.ident == "str" {
-                        return Some((format!("{arg}:literal"), arg));
+                        return Some((quote!{#arg:literal}, quote!{#arg}));
                     }
                 }
             }
@@ -918,12 +957,12 @@ fn parse_inner_type(pfx: &str, ty: &syn::Type) -> Option<(String, String)> {
             if let Some(inner_seg) = inner_type_path.path.segments.last() {
                 let ident_str = inner_seg.ident.to_string();
                 if ident_str == "String" {
-                    return Some((format!("{arg}:expr"), format!("{arg}.to_string()")));
+                    return Some((quote!{#arg:expr}, quote!{#arg.to_string()}));
                 } else if matches!(ident_str.as_str(),
                     "usize" | "u8" | "u16" | "u32" | "u64" | "u128" |
                     "isize" | "i8" | "i16" | "i32" | "i64" | "i128"
                 ) {
-                    return Some((format!("{arg}:literal"), arg));
+                    return Some((quote!{#arg:literal}, quote!{#arg}));
                 }
             }
         },
@@ -935,7 +974,7 @@ fn parse_inner_type(pfx: &str, ty: &syn::Type) -> Option<(String, String)> {
 fn parse_args_for_pattern(arg: &syn::FnArg) -> Option<Args> {
     let syn::FnArg::Typed(pat) = arg else { return None };
     let syn::Pat::Macro(m) = &*pat.pat else { return None };
-    Some(Args::Pattern {str: m.mac.tokens.to_string() })
+    Some(Args::Pattern {str: m.mac.tokens.clone() })
 }
 
 fn parse_args_for_token_stream(arg: &syn::FnArg) -> Option<Args> {
@@ -1061,11 +1100,10 @@ fn eval_fn_impl(
     // if args_ast.len() > 1 { return err!("{WRONG_ARGS}"); }
     let (args, args_code) = parse_args(&args_ast).context(|| error!(WRONG_ARGS))?;
     let args_setup = args.setup(); // FIXME
-    let input_str = expand_quote_macro(expand_output_macro(quote!{ #(#body_ast)* })).to_string();
+    let input_str = expand_output_macro(expand_quote_macro(quote!{ #(#body_ast)* })).to_string();
     let input_str = format!("{args_setup}\n{input_str}");
     let paths = Paths::new(options, name, &input_str)?;
-    debug!("REWRITTEN INPUT: {input_str}");
-
+    // panic!("REWRITTEN INPUT: {input_str}");
 
     let mut cfg = CargoConfig::default();
     if let Some(path) = &paths.cargo_toml_path {
@@ -1096,7 +1134,7 @@ fn eval_fn_impl(
         {output_code}
     ");
 
-    debug!("BODY: {macro_code}");
+    // panic!("BODY: {macro_code}");
     let out: TokenStream = macro_code.parse()
         .map_err(|err| error!("{err:?}"))
         .context("Failed to parse generated code.")?;
@@ -1119,38 +1157,43 @@ pub fn function(
 }
 
 fn function_impl(
-    attr: proc_macro::TokenStream,
+    attr_in: proc_macro::TokenStream,
     item: proc_macro::TokenStream
 ) -> Result<TokenStream> {
+    let item_str: TokenStream = item.clone().into();
+    let attr: TokenStream = attr_in.into();
     let input_fn_ast = syn::parse::<syn::ItemFn>(item)?;
-    let name = &input_fn_ast.sig.ident.to_string();
+    // let name = &input_fn_ast.sig.ident.to_string();
+    let name = &input_fn_ast.sig.ident;
     let args_ast = &input_fn_ast.sig.inputs;
     let body_ast = &input_fn_ast.block.stmts;
 
     // if args_ast.len() > 1 { return err!("{WRONG_ARGS}"); }
     let (args, args_code) = parse_args(&args_ast).context(|| error!(WRONG_ARGS))?;
     let args_pattern = args.pattern();
+    // panic!("{}", quote!{ #(#body_ast)* });
     let input_str = expand_arg_macro(quote!{ #(#body_ast)* });
+    // panic!("{}", input_str);
 
     let attrs_vec = input_fn_ast.attrs;
     let attrs = quote!{ #(#attrs_vec)* };
-    let mut macro_code = format!("
-        macro_rules! {name} {{
-            ({args_pattern}) => {{
-                #[crabtime::eval_fn({attr})]
-                fn {name}() {{
-                    {attrs}
-                    {args_code}
-                    {input_str}
-                }}
-            }};
-        }}
-    ");
+    let out = quote! {
+        macro_rules! #name {
+            (#args_pattern) => {
+                #[crabtime::eval_fn(#attr)]
+                fn #name() {
+                    #attrs
+                    #args_code
+                    #input_str
+                }
+            };
+        }
+    };
 
-    let out: TokenStream = macro_code.parse()
-        .map_err(|err| error!("{err:?}"))
-        .context("Failed to parse generated code.")?;
-    debug!("OUTPUT : {out}");
+    // let out: TokenStream = macro_code.parse()
+    //     .map_err(|err| error!("{err:?}"))
+    //     .context("Failed to parse generated code.")?;
+    // panic!("OUTPUT : {out}");
     Ok(out)
 }
 

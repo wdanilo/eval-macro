@@ -130,7 +130,7 @@
 //!     for (ix, name) in components.iter().enumerate() {
 //!         let dim = ix + 1;
 //!         let cons = components[0..dim].join(",");
-//!         output! {
+//!         crabtime::output! {
 //!             enum Position{{dim}} {
 //!                 {{cons}}
 //!             }
@@ -161,7 +161,7 @@
 //!                 {{cons}}
 //!             }
 //!         }
-//!     });
+//!     }).collect::<Vec<_>>();
 //!     structs.join("\n")
 //! }
 //! generate!();
@@ -265,12 +265,13 @@
 //! ```
 //! #[crabtime::function]
 //! fn generate(pattern!($name:ident, $components:tt): _) {
-//!     let components = $components;
+//!     let components = arg!($components);
 //!     for (ix, name) in components.iter().enumerate() {
 //!         let dim = ix + 1;
 //!         let cons = components[0..dim].join(",");
+//!         let name = stringify!($name);
 //!         crabtime::output! {
-//!             enum $name{{dim}} {
+//!             enum {{name}}{{dim}} {
 //!                 {{cons}}
 //!             }
 //!         }
@@ -612,12 +613,14 @@ macro_rules! eval {
     };
 }
 
+extern crate self as crabtime;
 
 mod xtest2 {
-    #[crate::function]
-    fn gen_me(components: Vec<&'static str>, inc: usize) {
+    #[crabtime::function]
+    fn generate() {
+        let components = ["X", "Y", "Z", "W"];
         for (ix, name) in components.iter().enumerate() {
-            let dim = ix + inc;
+            let dim = ix + 1;
             let cons = components[0..dim].join(",");
             crabtime::output! {
                 enum Position{{dim}} {
@@ -625,28 +628,25 @@ mod xtest2 {
                 }
             }
         }
+        // structs.collect::<Vec<_>>().join("\n")
     }
-    // macro_rules! gen_me {
-    //     ( [ $   ( $   components_arg   :   literal   ) , * $   ( ,   ) ?   ]  ) =>   {
-    //         #   [ crabtime   ::   eval_fn   (  ) ]
-    //         fn   gen_me   (  ) {
-    //             // let   inc   :   usize   =   1 ;
-    //             let     components   :   Vec   <   &   'static   str   >   =   ( [ $   ( $   components_arg   ) , *   ] .   into_iter   (  ) .   collect   (  ) ) ;
-    //             for   ( ix   ,   name   ) in   components   .   iter   (  ) .   enumerate   (  ) {
-    //                 let   dim   =   ix   +   1   ;   let   cons   =   components   [ 0   ..   dim   ] .   join   ( ","   ) ;
-    //                 crabtime   ::   output   !   { enum   Position   { { dim   } } { { { cons   } } } }
-    //             }
-    //         }
-    //     } ;
-    // }
-    // gen_me!(["X", "Y", "Z", "W"], 2);
-    #[crate::eval_fn()]
-    fn gen_me() {
-        let mut components: Vec<&'static str> = (["X", "Y", "Z", "W"].into_iter().collect());
-        for (ix, name) in components.iter().enumerate() {
-            let dim = ix + 1;
-            let cons = components[0..dim].join(",");
-            crabtime::output! { enum Position{{dim}} {{{cons}}} }
-        }
-    }
+    generate!();
+
 }
+//
+// mod xtest2 {
+//     #[crabtime::function]
+//     fn generate(input: TokenStream) {
+//         let components = input.to_string();
+//         for (ix, name) in components.iter().enumerate() {
+//             let dim = ix + 1;
+//             let cons = components[0..dim].join(",");
+//             crabtime::output! {
+//                 enum Position{{dim}} {
+//                     {{cons}}
+//                 }
+//             }
+//         }
+//     }
+//     generate!(["X", "Y", "Z", "W"]);
+// }
