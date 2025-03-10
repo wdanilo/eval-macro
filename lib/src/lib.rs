@@ -272,37 +272,10 @@
 //!
 //! ```
 //! #[crabtime::function]
-//! fn gen_positions7x(name: String, components: Vec<String>) {
+//! fn gen_positions7(name: String, components: Vec<String>) {
 //!     for (ix, name) in components.iter().enumerate() {
 //!         let dim = ix + 1;
 //!         let cons = components[0..dim].join(",");
-//!         crabtime::output! {
-//!             enum {{name}}{{dim}} {
-//!                 {{cons}}
-//!             }
-//!         }
-//!     }
-//! }
-//! gen_positions7x!(Position, ["X", "Y", "Z", "W"]);
-//! gen_positions7x!(Color, ["R", "G", "B"]);
-//! # fn main() {}
-//! ```
-//!
-//! <br/>
-//!
-//! <h5><b>Input by using patterns</b></h5>
-//!
-//! In case you want even more control, you can use the same patterns as in `macro_rules!` by using a special
-//! `pattern!` macro and you can expand any pattern using the `expand!` macro:
-//!
-//! ```
-//! #[crabtime::function]
-//! fn gen_positions7(pattern!($name:ident, $components:tt): _) {
-//!     let components = expand!($components);
-//!     for (ix, name) in components.iter().enumerate() {
-//!         let dim = ix + 1;
-//!         let cons = components[0..dim].join(",");
-//!         let name = stringify!($name);
 //!         crabtime::output! {
 //!             enum {{name}}{{dim}} {
 //!                 {{cons}}
@@ -317,13 +290,40 @@
 //!
 //! <br/>
 //!
+//! <h5><b>Input by using patterns</b></h5>
+//!
+//! In case you want even more control, you can use the same patterns as in `macro_rules!` by using a special
+//! `pattern!` macro and you can expand any pattern using the `expand!` macro:
+//!
+//! ```
+//! #[crabtime::function]
+//! fn gen_positions8(pattern!($name:ident, $components:tt): _) {
+//!     let components = expand!($components);
+//!     for (ix, name) in components.iter().enumerate() {
+//!         let dim = ix + 1;
+//!         let cons = components[0..dim].join(",");
+//!         let name = stringify!($name);
+//!         crabtime::output! {
+//!             enum {{name}}{{dim}} {
+//!                 {{cons}}
+//!             }
+//!         }
+//!     }
+//! }
+//! gen_positions8!(Position, ["X", "Y", "Z", "W"]);
+//! gen_positions8!(Color, ["R", "G", "B"]);
+//! # fn main() {}
+//! ```
+//!
+//! <br/>
+//!
 //! <h5><b>Input by using <code>TokenStream</code></b></h5>
 //!
 //! Alternatively, you can consume the provided input as `TokenStream`:
 //!
 //! ```
 //! #[crabtime::function]
-//! fn gen_positions8(name: TokenStream) {
+//! fn gen_positions9(name: TokenStream) {
 //!     #![dependency(proc-macro2 = "1")]
 //!     let components = ["X", "Y", "Z", "W"];
 //!     let name_str = name.to_string();
@@ -337,10 +337,9 @@
 //!         }
 //!     }
 //! }
-//! gen_positions8!(Position);
+//! gen_positions9!(Position);
 //! # fn main() {}
 //! ```
-//!
 //!
 //! <br/>
 //! <br/>
@@ -362,20 +361,27 @@
 //! | Evaluation (call site)                     | ✅ Fast | ✅ Fast | ❌ Slow for complex transformations |
 //! | Cost after changing module code without changing macro-call site code | ✅ Zero | ✅ Zero | ✅ Zero |
 //!
-//! Moreover, Crabtime generates performance statistics, so you can understand how much time was spent on
-//! evaluating your macros. If you expand any usage of `#[crabtime::function]` (for example in your IDE),
+//! Moreover, Crabtime generates runtime and performance statistics, so you can understand how much time was spent on
+//! evaluating your macros, where your projects were generated and what options were used to generate your code.
+//! If you expand any usage of `#[crabtime::function]` (for example in your IDE),
 //! you'll be presented with compilation stats in the following form:
 //!
 //! ```text
-//! Start: 17:39:21 (050)
-//! Duration: 0.12 s
+//! # Compilation Stats
+//! Start: 06:17:09 (825)
+//! Duration: 0.35 s
 //! Cached: true
+//! Output Dir: /Users/crabtime_user/my_project/target/debug/build/crabtime/macro_path
+//! Macro Options: MacroOptions {
+//!     cache: true,
+//!     content_base_name: false,
+//! }
 //! ```
 //!
 //! <br/>
 //! <br/>
 //!
-//! # 🪲 Logging
+//! # 🪲 Logging & Debugging
 //!
 //! There are several ways to log from your Crabtime macros. As the
 //! [proc_macro::Diagnostic](https://doc.rust-lang.org/proc_macro/struct.Diagnostic.html) is currently
@@ -446,18 +452,20 @@
 //!
 //! ```rust
 //! mod crabtime {
-//!     macro_rules! println_output {
-//!         // Prints a line prefixed with `OUTPUT:`.
+//!     macro_rules! output_str {
+//!         // Outputs a code by printing a line prefixed with `[OUTPUT]`.
 //!         # () => {};
 //!     }
 //!
-//!     macro_rules! println_warning {
-//!         // Prints a line prefixed with `WARNING:`.
+//!     macro_rules! warning {
+//!         // On the nightly channel prints compilation warning.
+//!         // On the stable channel prints a log prefixed with `[WARNING]`.
 //!         # () => {};
 //!     }
 //!
-//!     macro_rules! println_error {
-//!         // Prints a line prefixed with `ERROR:`.
+//!     macro_rules! error {
+//!         // On the nightly channel prints compilation error.
+//!         // On the stable channel prints a log prefixed with `[ERROR]`.
 //!         # () => {};
 //!     }
 //! }
@@ -616,13 +624,28 @@
 //! <br/>
 //! <br/>
 //!
+//! # ⚠️ Corner Cases
+//! There are a few things you should be aware of when using Crabtime:
+//! - Caching is associated with the current file path. It means that if in a single file you have multiple
+//!   Crabtime macros of the same name (e.g. by putting them in different modules within a single file), they
+//!   will use the same Rust project under the hood, which effectively will break the whole purpose of caching.
+//! - You can't use Crabtime functions to generate consts. Instead, use `Crabtime::eval` as shown above. This is because if
+//!   expanding constants, macros need to produce additional pair of `{` and `}` around the expanded tokens.
+//!   If anyone knows how to improve this, please contact me.
+//! - Error spans from the generated code are not mapped to your source code. It means that you will still get
+//!   nice, colored error messages, but the line/column numbers will be pointing to the generated file, not to
+//!   your source file. Again, this is an area for improvement, and I'd be happy to accept a PR that fixes this.
+//!
+//! <br/>
+//! <br/>
+//!
 //! # ⚠️ Troubleshooting
 //!
 //! ⚠️ **Note:** Rust IDEs differ in how they handle macro expansion. This macro is tuned for
-//! `RustRover’s` expansion engine.
+//! `rustc` and `RustRover’s` expansion engines.
 //!
-//! If your IDE struggles to correctly expand `eval!`, you can manually switch to the `write_ln!`
-//! syntax described above. If you encounter issues, please
+//! If your IDE struggles to correctly expand `eval!`, you can switch to the `crabtime::output_str!`
+//! syntax described above. If you encounter this, please
 //! [open an issue](https://github.com/wdanilo/eval-macro/issues) to let us know!
 
 pub use crabtime_internal::*;
@@ -645,21 +668,6 @@ macro_rules! eval {
     };
 }
 
-// #[crabtime::function]
-// fn gen_positions7x(name: String, components: Vec<String>) {
-//     let components = expand!($components);
-//     for (ix, name) in components.iter().enumerate() {
-//         let dim = ix + 1;
-//         let cons = components[0..dim].join(",");
-//         let name = stringify!($name);
-//         crabtime::output! {
-//             enum {{name}}{{dim}} {
-//                 {{cons}}
-//             }
-//         }
-//     }
-// }
-//
 
 
 
