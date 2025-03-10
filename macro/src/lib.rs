@@ -1180,12 +1180,23 @@ fn function_impl(
     let args_pattern = args.pattern();
     let args_setup = args.setup();
     // panic!("{}", quote!{ #(#body_ast)* });
+    let body = quote!{ #(#body_ast)* };
     let input_str = expand_expand_macro(quote!{ #(#body_ast)* });
     // panic!("{}", input_str);
 
     let attrs_vec = input_fn_ast.attrs;
     let attrs = quote!{ #(#attrs_vec)* };
     let out = quote! {
+        #[crabtime::trash]
+        fn trash() {
+            macro_rules! expand {
+                ($($input:tt)*) => {
+                    panic!()
+                }
+            }
+            #body
+        }
+
         macro_rules! #name {
             (@ [$($__input__:tt)*] #args_pattern) => {
                 #[crabtime::eval_fn(#attr)]
@@ -1244,14 +1255,6 @@ pub fn trash(
     item: proc_macro::TokenStream
 ) -> proc_macro::TokenStream {
     quote!{}.into()
-}
-
-#[proc_macro_attribute]
-pub fn trash2(
-    attr: proc_macro::TokenStream,
-    item: proc_macro::TokenStream
-) -> proc_macro::TokenStream {
-    quote!{fn trash() {}}.into()
 }
 
 // TODO: typed function output
