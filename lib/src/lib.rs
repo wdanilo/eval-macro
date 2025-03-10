@@ -188,20 +188,14 @@
 //!         format!("enum Position{dim} {{ {cons} }}")
 //!     }).collect::<Vec<_>>().join("\n")
 //! }
-//! #[crabtime::function]
-//! fn my_number() {
-//!     (std::f32::consts::PI.sqrt() * 10.0).round() as usize
-//! }
-//! my_number!();
-//! const MY_NUM: usize = my_number!();
 //! # fn main() {}
 //! ```
 //!
 //! <br/>
 //!
-//! <h5><b>Generating Output by using <code>crabtime.output</code></b></h5>
+//! <h5><b>Generating Output by using <code>crabtime::output_str</code></b></h5>
 //!
-//! Alternatively, you can use the `crabtime.output` function to immediately write strings to the
+//! Alternatively, you can use the `crabtime::output_str` function to immediately write strings to the
 //! code output buffer:
 //!
 //! ```
@@ -223,7 +217,8 @@
 //! <h5><b>Generating Output by returning a <code>TokenStream</code></b></h5>
 //!
 //! Finally, you can output `TokenStream` from the macro. Please note that for brevity the below example uses
-//! [inline dependency injection](...), which is described later.
+//! [inline dependency injection](...), which is described later. In real code you sohuld use your `Cargo.toml`'s
+//! `[build-dependencies]` section to include the necessary dependencies instead.
 //!
 //! ```
 //! #[crabtime::function]
@@ -268,14 +263,42 @@
 //!
 //! <br/>
 //!
+//! <h5><b>Input by using supported arguments</b></h5>
+//!
+//! Currently, you can use any combination of the following types as arguments to your macro and they will
+//! be automatically translated to patterns: `Vec<...>`, `&str`, `String`, and numbers. If the expected argument
+//! is string, you can pass either a string literal or an identifier, which will automatically be converted to
+//! string.
+//!
+//! ```
+//! #[crabtime::function]
+//! fn gen_positions7x(name: String, components: Vec<String>) {
+//!     for (ix, name) in components.iter().enumerate() {
+//!         let dim = ix + 1;
+//!         let cons = components[0..dim].join(",");
+//!         crabtime::output! {
+//!             enum {{name}}{{dim}} {
+//!                 {{cons}}
+//!             }
+//!         }
+//!     }
+//! }
+//! gen_positions7x!(Position, ["X", "Y", "Z", "W"]);
+//! gen_positions7x!(Color, ["R", "G", "B"]);
+//! # fn main() {}
+//! ```
+//!
+//! <br/>
+//!
 //! <h5><b>Input by using patterns</b></h5>
 //!
-//! You can use the same patterns as in `macro_rules!`:
+//! In case you want even more control, you can use the same patterns as in `macro_rules!` by using a special
+//! `pattern!` macro and you can expand any pattern using the `expand!` macro:
 //!
 //! ```
 //! #[crabtime::function]
 //! fn gen_positions7(pattern!($name:ident, $components:tt): _) {
-//!     let components = arg!($components);
+//!     let components = expand!($components);
 //!     for (ix, name) in components.iter().enumerate() {
 //!         let dim = ix + 1;
 //!         let cons = components[0..dim].join(",");
@@ -608,6 +631,8 @@ pub use crabtime_internal::*;
 // === Macro Helpers ===
 // =====================
 
+extern crate self as crabtime;
+
 #[macro_export]
 macro_rules! eval {
     ($($ts:tt)*) => {
@@ -620,26 +645,21 @@ macro_rules! eval {
     };
 }
 
-extern crate self as crabtime;
-
-// mod xtest2 {
-//     #[crabtime::function]
-//     fn my_number() {
-//         (std::f32::consts::PI.sqrt() * 10.0).round() as usize
-//     }
-//     macro_rules! my_number
-//     {
-//                 (@ [$ ($__input__ : tt) *]) =>
-//                 {
-//                     #[crabtime :: eval_fn()]
-//                     fn my_number()
-//                     {
-//                         let __INPUT_STR__ : & 'static str = stringify! ($ ($__input__) *);
-//                         (std :: f32 :: consts :: PI.sqrt() * 10.0).round() as usize
-//                     }
-//                 }; ($ ($input : tt) *) =>
-//                 { my_number! { @ [$ ($input) *] $ ($input) * } };
+// #[crabtime::function]
+// fn gen_positions7x(name: String, components: Vec<String>) {
+//     let components = expand!($components);
+//     for (ix, name) in components.iter().enumerate() {
+//         let dim = ix + 1;
+//         let cons = components[0..dim].join(",");
+//         let name = stringify!($name);
+//         crabtime::output! {
+//             enum {{name}}{{dim}} {
+//                 {{cons}}
 //             }
-//     const MY_NUM: usize = my_number!();
+//         }
+//     }
 // }
+//
+
+
 

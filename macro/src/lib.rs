@@ -227,6 +227,12 @@ const PRELUDE_STATIC: &str = "
         };
     }
     pub(super) use write_ln;
+
+    macro_rules! stringify_if_needed {
+        ($t:literal) => { $t };
+        ($t:expr) => { stringify!($t) };
+    }
+    pub(super) use stringify_if_needed;
 ";
 
 /// To be removed one day.
@@ -526,13 +532,13 @@ fn run_cargo_project(project_dir: &PathBuf) -> Result<String> {
 /// Find and expand the `output!` macro in the input `TokenStream`. After this lib stabilizes, this
 /// should be rewritten to standard macro and imported by the generated code.
 
-fn expand_arg_macro(input: TokenStream) -> TokenStream {
+fn expand_expand_macro(input: TokenStream) -> TokenStream {
     let tokens: Vec<TokenTree> = input.into_iter().collect();
     let mut output = TokenStream::new();
     let mut i = 0;
     while i < tokens.len() {
         if let TokenTree::Ident(ref ident) = tokens[i] {
-            if *ident == "arg" && i + 1 < tokens.len() {
+            if *ident == "expand" && i + 1 < tokens.len() {
                 if let TokenTree::Punct(ref excl) = tokens[i + 1] {
                     if excl.as_char() == '!' && i + 2 < tokens.len() {
                         if let TokenTree::Group(ref group) = tokens[i + 2] {
@@ -546,7 +552,7 @@ fn expand_arg_macro(input: TokenStream) -> TokenStream {
         }
         match &tokens[i] {
             TokenTree::Group(group) => {
-                let new_stream = expand_arg_macro(group.stream());
+                let new_stream = expand_expand_macro(group.stream());
                 let new_group = TokenTree::Group(proc_macro2::Group::new(group.delimiter(), new_stream));
                 output.extend(std::iter::once(new_group));
             }
@@ -934,7 +940,7 @@ fn parse_inner_type(pfx: &str, ty: &syn::Type) -> Option<(TokenStream, TokenStre
             if let syn::Type::Path(inner_path) = &*ty_ref.elem {
                 if let Some(inner_seg) = inner_path.path.segments.last() {
                     if inner_seg.ident == "str" {
-                        return Some((quote!{#arg:literal}, quote!{#arg}));
+                        return Some((quote!{#arg:expr}, quote!{crabtime::stringify_if_needed!{#arg}}));
                     }
                 }
             }
@@ -944,7 +950,7 @@ fn parse_inner_type(pfx: &str, ty: &syn::Type) -> Option<(TokenStream, TokenStre
             if let Some(inner_seg) = inner_type_path.path.segments.last() {
                 let ident_str = inner_seg.ident.to_string();
                 if ident_str == "String" {
-                    return Some((quote!{#arg:expr}, quote!{#arg.to_string()}));
+                    return Some((quote!{#arg:expr}, quote!{crabtime::stringify_if_needed!(#arg).to_string()}));
                 } else if matches!(ident_str.as_str(),
                     "usize" | "u8" | "u16" | "u32" | "u64" | "u128" |
                     "isize" | "i8" | "i16" | "i32" | "i64" | "i128"
@@ -1100,6 +1106,7 @@ fn eval_fn_impl(
     let attributes = cfg.extract_inline_attributes(input_fn_ast.attrs)?;
     let include_token_stream_impl = cfg.contains_dependency("proc-macro2");
     let input_code = prepare_input_code(&attributes, &input_str, include_token_stream_impl);
+    debug!("INPUT CODE: {input_code}");
     let mut output_dir_str = String::new();
     let (output, was_cached) = paths.with_output_dir(options.cache, |output_dir| {
         debug!("OUTPUT_DIR: {:?}", output_dir);
@@ -1120,15 +1127,12 @@ fn eval_fn_impl(
         /// Macro Options: {options_doc}
         {output_code}
     ");
-    let mut macro_code = format!("
-        {output_code}
-    ");
 
     // panic!("BODY: {macro_code}");
     let out: TokenStream = macro_code.parse()
         .map_err(|err| error!("{err:?}"))
         .context("Failed to parse generated code.")?;
-    // panic!("OUTPUT /: {out} ");
+    // panic!("OUTPUT: {out} ");
     Ok(out)
 }
 
@@ -1176,7 +1180,7 @@ fn function_impl(
     let args_pattern = args.pattern();
     let args_setup = args.setup();
     // panic!("{}", quote!{ #(#body_ast)* });
-    let input_str = expand_arg_macro(quote!{ #(#body_ast)* });
+    let input_str = expand_expand_macro(quote!{ #(#body_ast)* });
     // panic!("{}", input_str);
 
     let attrs_vec = input_fn_ast.attrs;
@@ -1193,7 +1197,9 @@ fn function_impl(
                     #input_str
                 }
             };
-
+            (@ $($ts:tt)*) => {
+                EXPANSION_ERROR
+            };
             ($($input:tt)*) => {
                 #name! { @ [$($input)*] $($input)* }
             };
@@ -1203,7 +1209,7 @@ fn function_impl(
     // let out: TokenStream = macro_code.parse()
     //     .map_err(|err| error!("{err:?}"))
     //     .context("Failed to parse generated code.")?;
-    debug!("OUTPUT : {out}");
+    // panic!("OUTPUT : {out}");
     Ok(out)
 }
 
