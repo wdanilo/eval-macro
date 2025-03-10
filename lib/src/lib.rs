@@ -15,19 +15,17 @@
 //!
 //! # 🆚 Comparison to proc macros and `macro_rules!`
 //!
-//! **Crabtime** introduces a new way to write Rust macros in a similar spirit to [Zig's comptime](...).
-//! It provides even greater flexibility and power than procedural macros, yet it is easy and natural to
-//! read and write. Below you can find the comparison of the most important aspects of Rust macro systems:
+//! Below you can find the comparison of the most important aspects of Rust macro systems:
 //!
 //! <h5><b>Input/Output</b></h5>
 //!
 //! | <div style="width:300px"/>                            | Crabtime | Proc Macro | Macro Rules |
 //! | :---                                                  | :---     | :---       | :---        |
-//! | Input as [Token Stream][1]                            | ✅       | ✅         | ❌          |
-//! | Input as [Macro Fragments][2]                         | ✅       | ❌         | ✅          |
+//! | Input as [Token Stream][token_stream]                 | ✅       | ✅         | ❌          |
+//! | Input as [Macro Fragments][macro_fragments]           | ✅       | ❌         | ✅          |
 //! | Input as Rust Code (String)                           | ✅       | ❌         | ❌          |
-//! | Output as [Token Stream][1]                           | ✅       | ✅         | ❌          |
-//! | Output as [Macro Fragments Template][2]               | ✅       | ❌         | ✅          |
+//! | Output as [Token Stream][token_stream]                | ✅       | ✅         | ❌          |
+//! | Output as [Macro Fragments Template][macro_fragments] | ✅       | ❌         | ✅          |
 //! | Output as Rust Code (String)                          | ✅       | ❌         | ❌          |
 //!
 //! <h5><b>Functionalities</b></h5>
@@ -51,8 +49,8 @@
 //! | Easy to read                                          | ✅       | ❌         | ⚠️          |
 //! | [Hygienic](...)                                       | ❌       | ❌         | ✅          |
 //!
-//! [1]: https://doc.rust-lang.org/proc_macro/struct.TokenStream.html
-//! [2]: https://doc.rust-lang.org/reference/macros-by-example.html#metavariables
+//! [token_stream]: https://doc.rust-lang.org/proc_macro/struct.TokenStream.html
+//! [macro_fragments]: https://doc.rust-lang.org/reference/macros-by-example.html#metavariables
 //!
 //! <br/>
 //! <br/>
@@ -108,11 +106,19 @@
 //! <br/>
 //! <br/>
 //!
+//! # 🤩 Attribute and Derive Macros
+//! Currently, generating attribute and derive macros is not supported, but we are working on it. If you want to help,
+//! ping us on [GitHub](https://github.com/wdanilo/crabtime).
+//!
+//! <br/>
+//! <br/>
+//!
 //! # 📤 Output
 //!
 //! There are several ways to generate the output code from a Crabtime macro. We recommend you to
 //! use either `crabtime::output!` or `crabtime::quote!` macros, as they allow for the most concise,
-//! easy to understand, and maintenable implementations.
+//! easy to understand, and maintenable implementations. Supported input types are described later,
+//! for now just ignore them.
 //!
 //! <br/>
 //!
@@ -121,12 +127,12 @@
 //! The simplest and most recommended way to generate macro output is by using the `crabtime::output!` macro.
 //! It allows for space-aware variable interpolation. It's like the `format!` macro, but with inversed rules
 //! regarding curly braces – it preserves single braces and uses double braces for interpolation. Please note
-//! that it preserves spaces, so `Position{{ix}}` will generate `Position1`, `Position2`, etc.
+//! that it preserves spaces, so `Position {{ix}}` and `Position{{ix}}` mean different things and the latter
+//! will generate `Position1`, `Position2`, etc.
 //!
 //! ```
 //! #[crabtime::function]
-//! fn gen_positions2() {
-//!     let components = ["X", "Y", "Z", "W"];
+//! fn gen_positions2(components: Vec<String>) {
 //!     for (ix, name) in components.iter().enumerate() {
 //!         let dim = ix + 1;
 //!         let cons = components[0..dim].join(",");
@@ -137,7 +143,7 @@
 //!         }
 //!     }
 //! }
-//! gen_positions2!();
+//! gen_positions2!(["X", "Y", "Z", "W"]);
 //! # fn main() {}
 //! ```
 //!
@@ -146,13 +152,12 @@
 //! <h5><b>Generating Output by using <code>crabtime::quote!</code></b></h5>
 //!
 //! The `crabtime::quote!` macro is just like `crabtime::output!`, but instead of outputting the code
-//! immediately, it returns it, so you can store it in a variable and re-use it across different subsequent
+//! immediately, it returns it (as a `String`), so you can store it in a variable and re-use it across different subsequent
 //! calls to `crabtime::quote!` or `crabtime::output!`.
 //!
 //! ```
 //! #[crabtime::function]
-//! fn gen_positions3() {
-//!     let components = ["X", "Y", "Z", "W"];
+//! fn gen_positions3(components: Vec<String>) {
 //!     let structs = components.iter().enumerate().map(|(ix, name)| {
 //!         let dim = ix + 1;
 //!         let cons = components[0..dim].join(",");
@@ -161,30 +166,34 @@
 //!                 {{cons}}
 //!             }
 //!         }
-//!     }).collect::<Vec<_>>();
+//!     }).collect::<Vec<String>>();
 //!     structs.join("\n")
 //! }
-//! gen_positions3!();
+//! gen_positions3!(["X", "Y", "Z", "W"]);
 //! # fn main() {}
 //! ```
 //!
 //! <br/>
 //!
-//! <h5><b>Generating Output by returning a String</b></h5>
+//! <h5><b>Generating Output by returning a String or number</b></h5>
 //!
-//! You can simply return a string from the function. It will be used as the generated macro code.
+//! You can simply return a string or number from the function. It will be used as the generated macro code.
 //!
 //! ```
 //! #[crabtime::function]
-//! fn gen_positions4() {
-//!     let components = ["X", "Y", "Z", "W"];
+//! fn gen_positions4(components: Vec<String>) {
 //!     components.iter().enumerate().map(|(ix, name)| {
 //!         let dim = ix + 1;
 //!         let cons = components[0..dim].join(",");
 //!         format!("enum Position{dim} {{ {cons} }}")
 //!     }).collect::<Vec<_>>().join("\n")
 //! }
-//! gen_positions4!();
+//! #[crabtime::function]
+//! fn my_number() {
+//!     (std::f32::consts::PI.sqrt() * 10.0).round() as usize
+//! }
+//! my_number!();
+//! const MY_NUM: usize = my_number!();
 //! # fn main() {}
 //! ```
 //!
@@ -613,18 +622,24 @@ macro_rules! eval {
 
 extern crate self as crabtime;
 
-mod xtest2 {
-    #[crabtime::function]
-    fn my_macro_expansion3() {
-        let components = ["X", "Y", "Z", "W"];
-        for (ix, name) in components.iter().enumerate() {
-            let dim = ix + 1;
-            let cons = components[0..dim].join(",");
-            __output_buffer__.push_str(
-                &format!("enum Position{dim} {{ {cons} }}\n")
-            );
-        }
-    }
-    my_macro_expansion3!();
-}
+// mod xtest2 {
+//     #[crabtime::function]
+//     fn my_number() {
+//         (std::f32::consts::PI.sqrt() * 10.0).round() as usize
+//     }
+//     macro_rules! my_number
+//     {
+//                 (@ [$ ($__input__ : tt) *]) =>
+//                 {
+//                     #[crabtime :: eval_fn()]
+//                     fn my_number()
+//                     {
+//                         let __INPUT_STR__ : & 'static str = stringify! ($ ($__input__) *);
+//                         (std :: f32 :: consts :: PI.sqrt() * 10.0).round() as usize
+//                     }
+//                 }; ($ ($input : tt) *) =>
+//                 { my_number! { @ [$ ($input) *] $ ($input) * } };
+//             }
+//     const MY_NUM: usize = my_number!();
+// }
 

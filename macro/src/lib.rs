@@ -870,46 +870,28 @@ fn parse_args(
             let mut code = TokenStream::new();
 
             for arg in args {
-                println!(">>1 {}", quote! {#arg});
                 if !is_first {
                     pat = quote! {#pat, };
-                    // pat.push_str(", ");
-                    // code.push_str("\n");
                 }
                 is_first = false;
                 if let syn::FnArg::Typed(pat_type) = arg {
-                    println!(">>2 {}", quote! {#pat_type});
 
                     if let syn::Pat::Ident(name) = &*pat_type.pat {
-                        println!(">>3 {}", quote! {#name});
                         let name_str = name.ident.to_string();
                         let ty = &*pat_type.ty;
-                        let ty_str = quote! { #ty }.to_string();
                         code = quote! {
                             #code
                             let #name: #ty =
                         };
-                        println!(">>4 {}", code);
-
-                        // code.push_str(&format!("let {name_str}: {ty_str} = ("));
-
-                        // Use our helper to determine the pattern and code for the type.
                         if let Some((param_pat, param_code)) = parse_arg_type(&name_str, ty) {
                             pat = quote! {#pat #param_pat};
                             code = quote! {#code #param_code};
-                            // pat.push_str(&param_pat);
-                            // code.push_str(&param_code);
                         }
-                        // code.push_str(");");
                         code = quote! {#code;};
-                        println!(">>5 {}", code);
-
                     }
                 }
-                println!("!!!!!!!!!!!!!!!!!!\nPAT: '{}'\nCODE: '{}'", pat, code);
             }
             pat = quote! {#pat $(,)?};
-            // pat.push_str("$(,)?");
             Some((Args::Pattern { str: pat }, code)) // FIXME middle token stream not computed
         })
 }
@@ -918,28 +900,19 @@ fn parse_args(
 #[inline(always)]
 fn parse_arg_type(pfx: &str, ty: &syn::Type) -> Option<(TokenStream, TokenStream)> {
     if let syn::Type::Path(type_path) = ty {
-        println!("??1 {}", quote! {#ty});
         let last_segment = type_path.path.segments.last()?;
-        // If the type is Vec<T>, process T and then wrap the results in vector syntax.
         if last_segment.ident == "Vec" {
             if let syn::PathArguments::AngleBracketed(angle_bracketed) = &last_segment.arguments {
                 let generic_arg = angle_bracketed.args.first()?;
                 if let syn::GenericArgument::Type(inner_ty) = generic_arg {
-                    println!("??2 {}", quote! {#inner_ty});
                     if let Some((inner_pat, inner_code)) = parse_inner_type(pfx, inner_ty) {
-                        println!("??3 {}", quote! {#inner_ty});
-
-                        // let pat = format!("[$({}),*$(,)?]", inner_pat);
                         let pat = quote! {[$(#inner_pat),*$(,)?]};
-                        // let code = format!("[$({}),*].into_iter().collect()", inner_code);
                         let code = quote! { [$(#inner_code),*].into_iter().collect() };
                         return Some((pat, code));
                     }
                 }
             }
         } else {
-            println!("??_ELSE {}", quote! {#ty});
-            // Non-vector: try to parse the type directly.
             return parse_inner_type(pfx, ty);
         }
     }
@@ -1135,7 +1108,6 @@ fn eval_fn_impl(
         let output = run_cargo_project(&output_dir)?;
         Ok((output, was_cached))
     })?;
-
     let output_code = parse_output(&output);
     let duration = format_duration(timer.elapsed());
     let options_doc = format!("{options:#?}").replace("\n", "\n/// ");
@@ -1148,12 +1120,15 @@ fn eval_fn_impl(
         /// Macro Options: {options_doc}
         {output_code}
     ");
+    let mut macro_code = format!("
+        {output_code}
+    ");
 
     // panic!("BODY: {macro_code}");
     let out: TokenStream = macro_code.parse()
         .map_err(|err| error!("{err:?}"))
         .context("Failed to parse generated code.")?;
-    debug!("OUTPUT : {out}");
+    // panic!("OUTPUT /: {out} ");
     Ok(out)
 }
 
@@ -1257,7 +1232,7 @@ fn get_current_time() -> String {
     format!("{hours:02}:{minutes:02}:{seconds:02} ({milliseconds:03})")
 }
 
-
+// TODO: typed function output
 // TODO: get lints from Cargo
 // TODO: support workspaces, for edition and dependencies or is it done automatically for edition?
 // TODO: macro export
