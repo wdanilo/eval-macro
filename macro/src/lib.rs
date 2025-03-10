@@ -1238,6 +1238,14 @@ fn get_current_time() -> String {
     format!("{hours:02}:{minutes:02}:{seconds:02} ({milliseconds:03})")
 }
 
+#[proc_macro_attribute]
+pub fn trash(
+    attr: proc_macro::TokenStream,
+    item: proc_macro::TokenStream
+) -> proc_macro::TokenStream {
+    quote!{}.into()
+}
+
 // TODO: typed function output
 // TODO: get lints from Cargo
 // TODO: support workspaces, for edition and dependencies or is it done automatically for edition?

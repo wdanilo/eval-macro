@@ -635,6 +635,7 @@
 //! - Error spans from the generated code are not mapped to your source code. It means that you will still get
 //!   nice, colored error messages, but the line/column numbers will be pointing to the generated file, not to
 //!   your source file. Again, this is an area for improvement, and I'd be happy to accept a PR that fixes this.
+//! - `Crabtime::eval` does not use caching, as there is no name we can associate the cache with.
 //!
 //! <br/>
 //! <br/>
@@ -666,4 +667,24 @@ macro_rules! eval {
             }
         }
     };
+}
+
+#[crabtime::eval_fn]
+fn test_hints() {
+    let components = ["X", "Y", "Z", "W"];
+    "fn ok(){}"
+}
+
+macro_rules! test_hints2 {
+    ($($ts:tt)*) => {
+        #[doc = "compile_fail"]
+        #[doc = stringify!($($ts)*)]
+        {}
+    };
+}
+
+fn foo() {
+    test_hints2! {
+        let x = 5;
+    }
 }
