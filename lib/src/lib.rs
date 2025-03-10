@@ -669,22 +669,24 @@ macro_rules! eval {
     };
 }
 
-
+fn foo() {
+    let x = 5;
+    
+}
 
 mod xt {
     #[crabtime::function]
-    fn gen_positions8(pattern!($name:ident, $components:tt): _) {
-        let components = expand!($components);
+    fn gen_positions8() {
+        let components = ["X", "Y", "Z", "W"];
         for (ix, name) in components.iter().enumerate() {
             let dim = ix + 1;
             let cons = components[0..dim].join(",");
-            let name = stringify!($name);
             crabtime::output! {
-                enum {{name}}{{dim}} {
+                enum Position{{dim}} {
                     {{cons}}
                 }
             }
         }
     }
-    gen_positions8!(Position, ["X", "Y", "Z", "W"]);
+    gen_positions8!();
 }

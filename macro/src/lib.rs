@@ -1187,14 +1187,15 @@ fn function_impl(
     let attrs_vec = input_fn_ast.attrs;
     let attrs = quote!{ #(#attrs_vec)* };
     let out = quote! {
-        #[crabtime::trash]
-        fn trash() {
-            macro_rules! expand {
-                ($($input:tt)*) => {
-                    panic!()
+        fn trashme() {
+            mod crabtime {
+                macro_rules! output {
+                    ($($tt:tt)*) => {};
                 }
+                pub(super) use output;
             }
             #body
+            ()
         }
 
         macro_rules! #name {
@@ -1254,7 +1255,10 @@ pub fn trash(
     attr: proc_macro::TokenStream,
     item: proc_macro::TokenStream
 ) -> proc_macro::TokenStream {
-    quote!{}.into()
+    let item2: TokenStream = item.into();
+    quote!{ fn trash() {
+        #item2
+    } }.into()
 }
 
 // TODO: typed function output
