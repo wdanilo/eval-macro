@@ -1,9 +1,9 @@
 [package]
-name = "eval-macro-internal"
-version = "0.5.0"
+name = "crabtime-internal"
+version = "0.6.0"
 authors = ["Wojciech Danilo <wojciech.danilo@gmail.com>"]
 edition = { workspace = true }
-description = "Helper for the eval-macro crate."
+description = "Helper for the crabtime crate."
 keywords = ["macros"]
 license = "MIT OR Apache-2.0"
 
@@ -11,6 +11,10 @@ license = "MIT OR Apache-2.0"
 proc-macro2 = { version = "1", features = ["span-locations"] }
 quote = "1"
 syn = { version = "2", features = ["full"] }
+toml = "0.8"
+
+[build-dependencies]
+rustc_version = "0.4"
 
 [lib]
 proc-macro = true
