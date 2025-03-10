@@ -524,43 +524,137 @@ fn run_cargo_project(project_dir: &PathBuf) -> Result<String> {
 
 /// Find and expand the `output!` macro in the input `TokenStream`. After this lib stabilizes, this
 /// should be rewritten to standard macro and imported by the generated code.
-fn expand_output_macro(input: TokenStream) -> TokenStream {
+
+fn expand_builtin_macro(name: &str, input: TokenStream, f: &impl Fn(TokenStream) -> TokenStream) -> TokenStream {
     let gen_mod = syn::Ident::new(GEN_MOD, Span::call_site());
     let tokens: Vec<TokenTree> = input.into_iter().collect();
     let mut output = TokenStream::new();
+    let len = tokens.len();
     let mut i = 0;
-    while i < tokens.len() {
-        if let TokenTree::Ident(ref ident) = tokens[i] {
-            if *ident == "output" && i + 1 < tokens.len() {
-                if let TokenTree::Punct(ref excl) = tokens[i + 1] {
-                    if excl.as_char() == '!' && i + 2 < tokens.len() {
-                        if let TokenTree::Group(ref group) = tokens[i + 2] {
-                            let inner_rewritten = expand_output_macro(group.stream());
-                            let content_str = print_tokens(&inner_rewritten);
-                            let lit = syn::LitStr::new(&content_str, Span::call_site());
-                            let new_tokens = quote! { #gen_mod::write_ln!(__output_buffer__, #lit); };
-                            output.extend(new_tokens);
-                            i += 3;
-                            continue;
+
+    while i < len {
+        // Check for the pattern: crabtime :: output ! ( group )
+        if i + 5 < len {
+            if let TokenTree::Ident(ref ident) = tokens[i] {
+                if ident == GEN_MOD {
+                    if let TokenTree::Punct(ref colon1) = tokens[i + 1] {
+                        if colon1.as_char() == ':' {
+                            if let TokenTree::Punct(ref colon2) = tokens[i + 2] {
+                                if colon2.as_char() == ':' {
+                                    if let TokenTree::Ident(ref out_ident) = tokens[i + 3] {
+                                        if out_ident == name {
+                                            if let TokenTree::Punct(ref excl) = tokens[i + 4] {
+                                                if excl.as_char() == '!' {
+                                                    if let TokenTree::Group(ref group) = tokens[i + 5] {
+                                                        let inner_rewritten = expand_builtin_macro(name, group.stream(), f);
+                                                        let new_tokens = f(inner_rewritten);
+                                                        output.extend(new_tokens);
+                                                        i += 6;
+                                                        continue;
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
                         }
                     }
                 }
             }
         }
+
+        // Recurse into groups or pass through token.
         match &tokens[i] {
             TokenTree::Group(group) => {
-                let new_stream = expand_output_macro(group.stream());
+                let new_stream = expand_builtin_macro(name, group.stream(), f);
+                // Rebuild group with same delimiter.
                 let new_group = TokenTree::Group(proc_macro2::Group::new(group.delimiter(), new_stream));
                 output.extend(std::iter::once(new_group));
             }
-            _ => {
-                output.extend(std::iter::once(tokens[i].clone()));
-            }
+            token => output.extend(std::iter::once(token.clone())),
         }
         i += 1;
     }
     output
 }
+
+fn expand_output_macro(input: TokenStream) -> TokenStream {
+    let gen_mod = syn::Ident::new(GEN_MOD, Span::call_site());
+    expand_builtin_macro("output", input, &|inner_rewritten| {
+        let content_str = print_tokens(&inner_rewritten);
+        let lit = syn::LitStr::new(&content_str, Span::call_site());
+        quote! {
+            #gen_mod::write_ln!(__output_buffer__, #lit);
+        }
+    })
+}
+
+fn expand_quote_macro(input: TokenStream) -> TokenStream {
+    expand_builtin_macro("quote", input, &|inner_rewritten| {
+        let content_str = print_tokens(&inner_rewritten);
+        let lit = syn::LitStr::new(&content_str, Span::call_site());
+        quote! { #lit }
+    })
+}
+
+// fn expand_output_macro(input: TokenStream) -> TokenStream {
+//     let gen_mod = syn::Ident::new(GEN_MOD, Span::call_site());
+//     let tokens: Vec<TokenTree> = input.into_iter().collect();
+//     let mut output = TokenStream::new();
+//     let len = tokens.len();
+//     let mut i = 0;
+//
+//     while i < len {
+//         // Check for the pattern: crabtime :: output ! ( group )
+//         if i + 5 < len {
+//             if let TokenTree::Ident(ref ident) = tokens[i] {
+//                 if ident == "crabtime" {
+//                     if let TokenTree::Punct(ref colon1) = tokens[i + 1] {
+//                         if colon1.as_char() == ':' {
+//                             if let TokenTree::Punct(ref colon2) = tokens[i + 2] {
+//                                 if colon2.as_char() == ':' {
+//                                     if let TokenTree::Ident(ref out_ident) = tokens[i + 3] {
+//                                         if out_ident == "output" {
+//                                             if let TokenTree::Punct(ref excl) = tokens[i + 4] {
+//                                                 if excl.as_char() == '!' {
+//                                                     if let TokenTree::Group(ref group) = tokens[i + 5] {
+//                                                         let inner_rewritten = expand_output_macro(group.stream());
+//                                                         let content_str = print_tokens(&inner_rewritten);
+//                                                         let lit = syn::LitStr::new(&content_str, Span::call_site());
+//                                                         let new_tokens = quote! {
+//                                                             #gen_mod::write_ln!(__output_buffer__, #lit);
+//                                                         };
+//                                                         output.extend(new_tokens);
+//                                                         i += 6;
+//                                                         continue;
+//                                                     }
+//                                                 }
+//                                             }
+//                                         }
+//                                     }
+//                                 }
+//                             }
+//                         }
+//                     }
+//                 }
+//             }
+//         }
+//
+//         // Recurse into groups or pass through token.
+//         match &tokens[i] {
+//             TokenTree::Group(group) => {
+//                 let new_stream = expand_output_macro(group.stream());
+//                 // Rebuild group with same delimiter.
+//                 let new_group = TokenTree::Group(proc_macro2::Group::new(group.delimiter(), new_stream));
+//                 output.extend(std::iter::once(new_group));
+//             }
+//             token => output.extend(std::iter::once(token.clone())),
+//         }
+//         i += 1;
+//     }
+//     output
+// }
 
 // =============
 // === Print ===
@@ -838,7 +932,7 @@ fn function_impl(
     let args = parse_args(&args_ast).context(|| error!(WRONG_ARGS))?;
     let args_pattern = args.pattern();
     let args_setup = args.setup();
-    let input_str = expand_output_macro(quote!{ #(#body_ast)* }).to_string();
+    let input_str = expand_quote_macro(expand_output_macro(quote!{ #(#body_ast)* })).to_string();
     let input_str = format!("{args_setup}\n{input_str}");
     let paths = Paths::new(options, name, &input_str)?;
     debug!("REWRITTEN INPUT: {input_str}");
