@@ -18,15 +18,10 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::process::Command;
 use std::default::Default;
-
-#[cfg(not(nightly))]
-mod non_nightly_deps {
-    pub use std::collections::hash_map::DefaultHasher;
-    pub use std::hash::Hash;
-    pub use std::hash::Hasher;
-}
-#[cfg(not(nightly))]
-use non_nightly_deps::*;
+use std::error::Error;
+use std::collections::hash_map::DefaultHasher;
+use std::hash::Hash;
+use std::hash::Hasher;
 
 use error::*;
 
@@ -154,6 +149,54 @@ const PRELUDE_STATIC: &str = "
         }
     }
 
+    impl CodeFromOutput for usize {
+        fn code_from_output(output: Self) -> String {
+            format!(\"{output}\")
+        }
+    }
+
+    impl CodeFromOutput for u8 {
+        fn code_from_output(output: Self) -> String {
+            format!(\"{output}\")
+        }
+    }
+
+    impl CodeFromOutput for u16 {
+        fn code_from_output(output: Self) -> String {
+            format!(\"{output}\")
+        }
+    }
+
+    impl CodeFromOutput for u32 {
+        fn code_from_output(output: Self) -> String {
+            format!(\"{output}\")
+        }
+    }
+
+    impl CodeFromOutput for u64 {
+        fn code_from_output(output: Self) -> String {
+            format!(\"{output}\")
+        }
+    }
+
+    impl CodeFromOutput for u128 {
+        fn code_from_output(output: Self) -> String {
+            format!(\"{output}\")
+        }
+    }
+
+    impl CodeFromOutput for f32 {
+        fn code_from_output(output: Self) -> String {
+            format!(\"{output}\")
+        }
+    }
+
+    impl CodeFromOutput for f64 {
+        fn code_from_output(output: Self) -> String {
+            format!(\"{output}\")
+        }
+    }
+
     pub(super) fn code_from_output<T: CodeFromOutput>(output: T) -> String {
         <T as CodeFromOutput>::code_from_output(output)
     }
@@ -239,7 +282,7 @@ fn find_parent_dir<'t>(path: &'t Path, dir_name: &str) -> Result<&'t Path> {
 
 impl Paths {
     #[cfg(nightly)]
-    fn new(macro_name: &str, _input_str: &str) -> Result<Self> {
+    fn new(options: MacroOptions, macro_name: &str, input_str: &str) -> Result<Self> {
         let mut call_site_path = proc_macro::Span::call_site().source_file().path();
         call_site_path.set_extension("");
         let crate_out_str = OUT_DIR;
@@ -249,12 +292,13 @@ impl Paths {
         let file_path = workspace.join(&call_site_path);
         let cargo_toml_path = Some(find_cargo_configs(&file_path)?);
         let build_dir = find_parent_dir(crate_out, "build")?;
-        let output_dir = build_dir.join(CRATE).join(call_site_path).join(macro_name);
+        let name = if options.content_base_name { project_name_from_input(input_str) } else { macro_name.to_string() };
+        let output_dir = build_dir.join(CRATE).join(call_site_path).join(&name);
         Ok(Self { output_dir, cargo_toml_path })
     }
 
     #[cfg(not(nightly))]
-    fn new(_macro_name: &str, input_str: &str) -> Result<Self> {
+    fn new(_options: MacroOptions, _macro_name: &str, input_str: &str) -> Result<Self> {
         let home_dir = std::env::var("HOME").context("$HOME not set")?;
         let eval_macro_dir = PathBuf::from(home_dir).join(".cargo").join(CRATE);
         let project_name = project_name_from_input(input_str);
@@ -263,19 +307,19 @@ impl Paths {
         Ok(Self { output_dir, cargo_toml_path: None })
     }
 
-    fn with_output_dir<T>(&self, f: impl FnOnce(&PathBuf) -> Result<T>) -> Result<T> {
+    fn with_output_dir<T>(&self, cache: bool, f: impl FnOnce(&PathBuf) -> Result<T>) -> Result<T> {
         if !self.output_dir.exists() {
             fs::create_dir_all(&self.output_dir).context("Failed to create project directory.")?;
         }
         let out = f(&self.output_dir);
         // We cache projects on nightly. On stable, the project name is based on the input code.
-        #[cfg(not(nightly))]
-        fs::remove_dir_all(&self.output_dir).ok();
+        if cfg!(not(nightly)) || !cache {
+            fs::remove_dir_all(&self.output_dir).ok();
+        }
         out
     }
 }
 
-#[cfg(not(nightly))]
 fn project_name_from_input(input_str: &str) -> String {
     let mut hasher = DefaultHasher::new();
     input_str.hash(&mut hasher);
@@ -392,7 +436,6 @@ impl CargoConfig {
         let mut new_dependencies: Vec<Dependency> = vec![]; // FIXME expl typing not needed
         for attr in attributes {
             let tokens = attr.parse_args::<TokenStream>().context("Failed to parse attributes")?;
-            println!(">>>> {:?}", tokens);
             let tokens_str = tokens.to_string().replace(" ", "");
             let token_range = tokens.clone().into_iter().next()
                 .zip(tokens.clone().into_iter().last())
@@ -724,6 +767,49 @@ fn parse_output(output: &str) -> String {
     code
 }
 
+#[derive(Clone, Copy, Debug)]
+struct MacroOptions {
+    pub cache: bool,
+    pub content_base_name: bool,
+    pub prevent_duplicate_names: bool,
+}
+
+impl Default for MacroOptions {
+    fn default() -> Self {
+        Self {
+            cache: true,
+            content_base_name: false,
+            prevent_duplicate_names: true,
+        }
+    }
+}
+
+impl syn::parse::Parse for MacroOptions {
+    fn parse(input: syn::parse::ParseStream) -> Result<Self, syn::Error> {
+        let mut options = MacroOptions::default();
+        while !input.is_empty() {
+            let ident: syn::Ident = input.parse()?;
+            let _eq_token: syn::Token![=] = input.parse()?;
+            if ident == "cache" {
+                let bool_lit: syn::LitBool = input.parse()?;
+                options.cache = bool_lit.value;
+            } else if ident == "content_base_name" {
+                let bool_lit: syn::LitBool = input.parse()?;
+                options.content_base_name = bool_lit.value;
+            } else if ident == "prevent_duplicate_names" {
+                let bool_lit: syn::LitBool = input.parse()?;
+                options.prevent_duplicate_names = bool_lit.value;
+            } else {
+                return Err(syn::Error::new(ident.span(), "unknown attribute"));
+            }
+            if input.peek(syn::Token![,]) {
+                let _comma: syn::Token![,] = input.parse()?;
+            }
+        }
+        Ok(options)
+    }
+}
+
 /// Function-like macro generation.
 #[proc_macro_attribute]
 pub fn function(
@@ -736,9 +822,10 @@ pub fn function(
 }
 
 fn function_impl(
-    _attr: proc_macro::TokenStream,
+    attr: proc_macro::TokenStream,
     item: proc_macro::TokenStream
 ) -> Result<TokenStream> {
+    let options = syn::parse::<MacroOptions>(attr)?;
     let start_time = get_current_time();
     let timer = std::time::Instant::now();
 
@@ -753,7 +840,7 @@ fn function_impl(
     let args_setup = args.setup();
     let input_str = expand_output_macro(quote!{ #(#body_ast)* }).to_string();
     let input_str = format!("{args_setup}\n{input_str}");
-    let paths = Paths::new(name, &input_str)?;
+    let paths = Paths::new(options, name, &input_str)?;
     debug!("REWRITTEN INPUT: {input_str}");
 
 
@@ -764,8 +851,10 @@ fn function_impl(
     let attributes = cfg.extract_inline_attributes(input_fn_ast.attrs)?;
     let include_token_stream_impl = cfg.contains_dependency("proc-macro2");
     let input_code = prepare_input_code(&attributes, &input_str, include_token_stream_impl);
-    let (output, was_cached) = paths.with_output_dir(|output_dir| {
+    let mut output_dir_str = String::new();
+    let (output, was_cached) = paths.with_output_dir(options.cache, |output_dir| {
         debug!("OUTPUT_DIR: {:?}", output_dir);
+        output_dir_str = output_dir.to_string_lossy().to_string();
         let was_cached = create_project_skeleton(&output_dir, cfg, &input_code)?;
         let output = run_cargo_project(&output_dir)?;
         Ok((output, was_cached))
@@ -773,21 +862,27 @@ fn function_impl(
 
     let output_code = parse_output(&output);
     let duration = format_duration(timer.elapsed());
-    let macro_code = format!("
+    let options_doc = format!("{options:#?}").replace("\n", "\n/// ");
+    let mut macro_code = format!("
         /// # Compilation Stats
         /// Start: {start_time}
         /// Duration: {duration}
         /// Cached: {was_cached}
-        ///
-        /// Dummy function used to prevent duplicate names in the same module.
-        fn {CRATE}_{name}() {{}}
-
+        /// Output Dir: {output_dir_str}
+        /// Macro Options: {options_doc}
         macro_rules! {name} {{
             ({args_pattern}) => {{
                {output_code}
             }};
         }}
     ");
+    if options.prevent_duplicate_names {
+        macro_code.push_str(&format!("
+            /// Dummy function used to prevent duplicate names in the same module.
+            fn {CRATE}_{name}() {{}}
+        "));
+    }
+
     debug!("BODY: {macro_code}");
     let out: TokenStream = macro_code.parse()
         .map_err(|err| error!("{err:?}"))
@@ -831,3 +926,4 @@ fn get_current_time() -> String {
 //             // ...
 //         }
 //     }
+// TODO: removing project can cause another process to fail - after compilation, another process might already acquire lock
