@@ -91,7 +91,7 @@
 //! ```
 //! // Evaluates the code at build-time, and uses it's output to generate macro `gen_positions!`.
 //! #[crabtime::function]
-//! fn gen_positions() {
+//! fn gen_positions1() {
 //!     "
 //!     enum Position1 { X }
 //!     enum Position2 { X, Y }
@@ -101,7 +101,7 @@
 //! }
 //!
 //! // We are now using the macro to generate four structs.
-//! gen_positions!();
+//! gen_positions1!();
 //! # fn main() {}
 //! ```
 //!
@@ -125,7 +125,7 @@
 //!
 //! ```
 //! #[crabtime::function]
-//! fn gen_positions() {
+//! fn gen_positions2() {
 //!     let components = ["X", "Y", "Z", "W"];
 //!     for (ix, name) in components.iter().enumerate() {
 //!         let dim = ix + 1;
@@ -137,7 +137,7 @@
 //!         }
 //!     }
 //! }
-//! gen_positions!();
+//! gen_positions2!();
 //! # fn main() {}
 //! ```
 //!
@@ -151,7 +151,7 @@
 //!
 //! ```
 //! #[crabtime::function]
-//! fn generate() {
+//! fn gen_positions3() {
 //!     let components = ["X", "Y", "Z", "W"];
 //!     let structs = components.iter().enumerate().map(|(ix, name)| {
 //!         let dim = ix + 1;
@@ -164,7 +164,7 @@
 //!     }).collect::<Vec<_>>();
 //!     structs.join("\n")
 //! }
-//! generate!();
+//! gen_positions3!();
 //! # fn main() {}
 //! ```
 //!
@@ -176,7 +176,7 @@
 //!
 //! ```
 //! #[crabtime::function]
-//! fn generate() {
+//! fn gen_positions4() {
 //!     let components = ["X", "Y", "Z", "W"];
 //!     components.iter().enumerate().map(|(ix, name)| {
 //!         let dim = ix + 1;
@@ -184,7 +184,7 @@
 //!         format!("enum Position{dim} {{ {cons} }}")
 //!     }).collect::<Vec<_>>().join("\n")
 //! }
-//! generate!();
+//! gen_positions4!();
 //! # fn main() {}
 //! ```
 //!
@@ -197,15 +197,15 @@
 //!
 //! ```
 //! #[crabtime::function]
-//! fn generate() {
+//! fn gen_positions5() {
 //!     let components = ["X", "Y", "Z", "W"];
 //!     for (ix, name) in components.iter().enumerate() {
 //!         let dim = ix + 1;
 //!         let cons = components[0..dim].join(",");
-//!         crabtime.output(format!("enum Position{dim} {{ {cons} }}"))
+//!         crabtime::output_str!("enum Position{dim} {{ {cons} }}")
 //!     }
 //! }
-//! generate!();
+//! gen_positions5!();
 //! # fn main() {}
 //! ```
 //!
@@ -218,7 +218,7 @@
 //!
 //! ```
 //! #[crabtime::function]
-//! fn generate() {
+//! fn gen_positions6() {
 //!     // Inline dependencies used for brevity.
 //!     // You should use [build-dependencies] section in your Cargo.toml instead.
 //!     #![dependency(proc-macro2 = "1")]
@@ -244,6 +244,7 @@
 //!         #(#defs)*
 //!     }
 //! }
+//! gen_positions6!();
 //! # fn main() {}
 //! ```
 //!
@@ -264,7 +265,7 @@
 //!
 //! ```
 //! #[crabtime::function]
-//! fn generate(pattern!($name:ident, $components:tt): _) {
+//! fn gen_positions7(pattern!($name:ident, $components:tt): _) {
 //!     let components = arg!($components);
 //!     for (ix, name) in components.iter().enumerate() {
 //!         let dim = ix + 1;
@@ -277,8 +278,8 @@
 //!         }
 //!     }
 //! }
-//! generate!(Position, ["X", "Y", "Z", "W"]);
-//! generate!(Color, ["R", "G", "B"]);
+//! gen_positions7!(Position, ["X", "Y", "Z", "W"]);
+//! gen_positions7!(Color, ["R", "G", "B"]);
 //! # fn main() {}
 //! ```
 //!
@@ -290,19 +291,21 @@
 //!
 //! ```
 //! #[crabtime::function]
-//! fn generate(input: TokenStream) {
-//!     let components = input.to_string();
+//! fn gen_positions8(name: TokenStream) {
+//!     #![dependency(proc-macro2 = "1")]
+//!     let components = ["X", "Y", "Z", "W"];
+//!     let name_str = name.to_string();
 //!     for (ix, name) in components.iter().enumerate() {
 //!         let dim = ix + 1;
 //!         let cons = components[0..dim].join(",");
 //!         crabtime::output! {
-//!             enum Position{{dim}} {
+//!             enum {{name_str}}{{dim}} {
 //!                 {{cons}}
 //!             }
 //!         }
 //!     }
 //! }
-//! generate!(["X", "Y", "Z", "W"]);
+//! gen_positions8!(Position);
 //! # fn main() {}
 //! ```
 //!
@@ -505,81 +508,76 @@
 //! so this:
 //!
 //! ```
-//! use crabtime::eval;
-//!
-//! eval! {
+//! #[crabtime::function]
+//! fn my_macro_expansion1() {
 //!     let components = ["X", "Y", "Z", "W"];
 //!     for (ix, name) in components.iter().enumerate() {
 //!         let dim = ix + 1;
 //!         let cons = components[0..dim].join(",");
-//!         output! {
+//!         crabtime::output! {
 //!             enum Position{{dim}} {
 //!                 {{cons}}
 //!             }
 //!         }
 //!     }
 //! }
+//! my_macro_expansion1!();
 //! # fn main() {}
 //! ```
 //!
 //! Is equivalent to:
 //!
 //! ```
-//! use crabtime::eval;
-//!
-//! eval! {
+//! #[crabtime::function]
+//! fn my_macro_expansion2() {
 //!     let components = ["X", "Y", "Z", "W"];
 //!     for (ix, name) in components.iter().enumerate() {
 //!         let dim = ix + 1;
 //!         let cons = components[0..dim].join(",");
-//!         // The `write_ln!` macro is delivered by this library.
-//!         write_ln!(output_buffer, "
+//!         crabtime::output_str! {"
 //!             enum Position{dim} {{
 //!                 {cons}
 //!             }}
-//!         ");
+//!         "}
 //!     }
 //! }
+//! my_macro_expansion2!();
 //! # fn main() {}
 //! ```
 //!
 //! And that, in turn, is just shorthand for:
 //!
 //! ```
-//! use crabtime::eval;
-//!
-//! eval! {
+//! #[crabtime::function]
+//! fn my_macro_expansion3() {
 //!     let components = ["X", "Y", "Z", "W"];
 //!     for (ix, name) in components.iter().enumerate() {
 //!         let dim = ix + 1;
 //!         let cons = components[0..dim].join(",");
-//!         output_buffer.push_str(
-//!             &format!("
-//!                 enum Position{dim} {{
-//!                     {cons}
-//!                 }}
-//!             ")
+//!         __output_buffer__.push_str(
+//!             &format!("enum Position{dim} {{ {cons} }}\n")
 //!         );
 //!     }
 //! }
+//! my_macro_expansion3!();
 //! # fn main() {}
 //! ```
 //!
 //! Which, ultimately, is equivalent to:
 //!
 //! ```
-//! use crabtime::eval;
-//!
-//! eval! {
+//! #[crabtime::function]
+//! fn my_macro_expansion4() {
 //!     let components = ["X", "Y", "Z", "W"];
 //!     for (ix, name) in components.iter().enumerate() {
 //!         let dim = ix + 1;
 //!         let cons = components[0..dim].join(",");
-//!         println!("OUTPUT: enum Position{dim} {{");
-//!         println!("OUTPUT:     {cons}");
-//!         println!("OUTPUT: }}");
+//!         println!("[OUTPUT] enum Position{dim} {{");
+//!         println!("[OUTPUT]     {cons}");
+//!         println!("[OUTPUT] }}");
 //!     }
 //! }
+//! my_macro_expansion4!();
 //! # fn main() {}
 //! ```
 //!
@@ -617,36 +615,16 @@ extern crate self as crabtime;
 
 mod xtest2 {
     #[crabtime::function]
-    fn generate() {
+    fn my_macro_expansion3() {
         let components = ["X", "Y", "Z", "W"];
         for (ix, name) in components.iter().enumerate() {
             let dim = ix + 1;
             let cons = components[0..dim].join(",");
-            crabtime::output! {
-                enum Position{{dim}} {
-                    {{cons}}
-                }
-            }
+            __output_buffer__.push_str(
+                &format!("enum Position{dim} {{ {cons} }}\n")
+            );
         }
-        // structs.collect::<Vec<_>>().join("\n")
     }
-    generate!();
-
+    my_macro_expansion3!();
 }
-//
-// mod xtest2 {
-//     #[crabtime::function]
-//     fn generate(input: TokenStream) {
-//         let components = input.to_string();
-//         for (ix, name) in components.iter().enumerate() {
-//             let dim = ix + 1;
-//             let cons = components[0..dim].join(",");
-//             crabtime::output! {
-//                 enum Position{{dim}} {
-//                     {{cons}}
-//                 }
-//             }
-//         }
-//     }
-//     generate!(["X", "Y", "Z", "W"]);
-// }
+

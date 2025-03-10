@@ -836,17 +836,17 @@ enum Args {
 impl Args {
     fn pattern(&self) -> TokenStream {
         match self {
-            Self::TokenStream { .. } => Default::default(),
+            Self::TokenStream { ident } => quote! { $($#ident:tt)* },
             Self::Pattern { str } => str.clone(),
         }
     }
 
-    fn setup(&self) -> String {
+    fn setup(&self) -> TokenStream {
         if let Self::TokenStream { ident } = self {
-            format!("
+            quote! {
                 use proc_macro2::TokenStream;
-                let {ident}: TokenStream = SOURCE_CODE.parse().unwrap();
-            ")
+                let #ident: TokenStream = __INPUT_STR__.parse().unwrap();
+            }
         } else {
             Default::default()
         }
@@ -870,6 +870,7 @@ fn parse_args(
             let mut code = TokenStream::new();
 
             for arg in args {
+                println!(">>1 {}", quote! {#arg});
                 if !is_first {
                     pat = quote! {#pat, };
                     // pat.push_str(", ");
@@ -877,7 +878,10 @@ fn parse_args(
                 }
                 is_first = false;
                 if let syn::FnArg::Typed(pat_type) = arg {
+                    println!(">>2 {}", quote! {#pat_type});
+
                     if let syn::Pat::Ident(name) = &*pat_type.pat {
+                        println!(">>3 {}", quote! {#name});
                         let name_str = name.ident.to_string();
                         let ty = &*pat_type.ty;
                         let ty_str = quote! { #ty }.to_string();
@@ -885,6 +889,8 @@ fn parse_args(
                             #code
                             let #name: #ty =
                         };
+                        println!(">>4 {}", code);
+
                         // code.push_str(&format!("let {name_str}: {ty_str} = ("));
 
                         // Use our helper to determine the pattern and code for the type.
@@ -896,13 +902,15 @@ fn parse_args(
                         }
                         // code.push_str(");");
                         code = quote! {#code;};
+                        println!(">>5 {}", code);
+
                     }
                 }
                 println!("!!!!!!!!!!!!!!!!!!\nPAT: '{}'\nCODE: '{}'", pat, code);
             }
             pat = quote! {#pat $(,)?};
             // pat.push_str("$(,)?");
-            Some((Args::Pattern { str: pat }, code))
+            Some((Args::Pattern { str: pat }, code)) // FIXME middle token stream not computed
         })
 }
 
@@ -910,13 +918,17 @@ fn parse_args(
 #[inline(always)]
 fn parse_arg_type(pfx: &str, ty: &syn::Type) -> Option<(TokenStream, TokenStream)> {
     if let syn::Type::Path(type_path) = ty {
+        println!("??1 {}", quote! {#ty});
         let last_segment = type_path.path.segments.last()?;
         // If the type is Vec<T>, process T and then wrap the results in vector syntax.
         if last_segment.ident == "Vec" {
             if let syn::PathArguments::AngleBracketed(angle_bracketed) = &last_segment.arguments {
                 let generic_arg = angle_bracketed.args.first()?;
                 if let syn::GenericArgument::Type(inner_ty) = generic_arg {
+                    println!("??2 {}", quote! {#inner_ty});
                     if let Some((inner_pat, inner_code)) = parse_inner_type(pfx, inner_ty) {
+                        println!("??3 {}", quote! {#inner_ty});
+
                         // let pat = format!("[$({}),*$(,)?]", inner_pat);
                         let pat = quote! {[$(#inner_pat),*$(,)?]};
                         // let code = format!("[$({}),*].into_iter().collect()", inner_code);
@@ -926,6 +938,7 @@ fn parse_arg_type(pfx: &str, ty: &syn::Type) -> Option<(TokenStream, TokenStream
                 }
             }
         } else {
+            println!("??_ELSE {}", quote! {#ty});
             // Non-vector: try to parse the type directly.
             return parse_inner_type(pfx, ty);
         }
@@ -939,8 +952,9 @@ fn parse_arg_type(pfx: &str, ty: &syn::Type) -> Option<(TokenStream, TokenStream
 /// - Integers (e.g. usize, u8, i32, etc.): yields pattern `"$arg:literal"` and code `"$arg"`
 #[inline(always)]
 fn parse_inner_type(pfx: &str, ty: &syn::Type) -> Option<(TokenStream, TokenStream)> {
-    let arg_str = format!("${pfx}_arg");
-    let arg = syn::Ident::new(&arg_str, Span::call_site());
+    let arg_str = format!("{pfx}_arg");
+    let arg_ident = syn::Ident::new(&arg_str, Span::call_site());
+    let arg = quote! {$#arg_ident};
     match ty {
         // Match references, e.g. &str (with or without an explicit 'static lifetime)
         syn::Type::Reference(ty_ref) => {
@@ -1098,10 +1112,11 @@ fn eval_fn_impl(
     let body_ast = &input_fn_ast.block.stmts;
 
     // if args_ast.len() > 1 { return err!("{WRONG_ARGS}"); }
-    let (args, args_code) = parse_args(&args_ast).context(|| error!(WRONG_ARGS))?;
-    let args_setup = args.setup(); // FIXME
+
+    // let (args, args_code) = parse_args(&args_ast).context(|| error!(WRONG_ARGS))?;
+    // let args_setup = args.setup(); // FIXME
     let input_str = expand_output_macro(expand_quote_macro(quote!{ #(#body_ast)* })).to_string();
-    let input_str = format!("{args_setup}\n{input_str}");
+    // let input_str = format!("{args_setup}\n{input_str}");
     let paths = Paths::new(options, name, &input_str)?;
     // panic!("REWRITTEN INPUT: {input_str}");
 
@@ -1170,7 +1185,21 @@ fn function_impl(
 
     // if args_ast.len() > 1 { return err!("{WRONG_ARGS}"); }
     let (args, args_code) = parse_args(&args_ast).context(|| error!(WRONG_ARGS))?;
+
+    // let args_setup = quote! {
+    //     let ARGS_AS_STR: String = #args_setup_pat;
+    // };
+    // let args_setup = if let Args::TokenStream { ident } = &args {
+    //     quote! {
+    //         use proc_macro2::TokenStream;
+    //         let #ident: TokenStream = stringify!().parse().unwrap();
+    //     }
+    // } else {
+    //     quote! {}
+    // };
+
     let args_pattern = args.pattern();
+    let args_setup = args.setup();
     // panic!("{}", quote!{ #(#body_ast)* });
     let input_str = expand_arg_macro(quote!{ #(#body_ast)* });
     // panic!("{}", input_str);
@@ -1179,13 +1208,19 @@ fn function_impl(
     let attrs = quote!{ #(#attrs_vec)* };
     let out = quote! {
         macro_rules! #name {
-            (#args_pattern) => {
+            (@ [$($__input__:tt)*] #args_pattern) => {
                 #[crabtime::eval_fn(#attr)]
                 fn #name() {
                     #attrs
+                    let __INPUT_STR__: &'static str = stringify!($($__input__)*);
+                    #args_setup
                     #args_code
                     #input_str
                 }
+            };
+
+            ($($input:tt)*) => {
+                #name! { @ [$($input)*] $($input)* }
             };
         }
     };
@@ -1193,7 +1228,7 @@ fn function_impl(
     // let out: TokenStream = macro_code.parse()
     //     .map_err(|err| error!("{err:?}"))
     //     .context("Failed to parse generated code.")?;
-    // panic!("OUTPUT : {out}");
+    debug!("OUTPUT : {out}");
     Ok(out)
 }
 
