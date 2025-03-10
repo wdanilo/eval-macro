@@ -1246,6 +1246,14 @@ pub fn trash(
     quote!{}.into()
 }
 
+#[proc_macro_attribute]
+pub fn trash2(
+    attr: proc_macro::TokenStream,
+    item: proc_macro::TokenStream
+) -> proc_macro::TokenStream {
+    quote!{fn trash() {}}.into()
+}
+
 // TODO: typed function output
 // TODO: get lints from Cargo
 // TODO: support workspaces, for edition and dependencies or is it done automatically for edition?
