@@ -828,9 +828,108 @@ impl Args {
 
 fn parse_args(
     args: &syn::punctuated::Punctuated<syn::FnArg, syn::token::Comma>
-) -> Option<Args> {
-    let Some(arg) = args.first() else { return Some(Args::Pattern { str: String::new() }) };
-    parse_args_for_pattern(arg).or_else(|| parse_args_for_token_stream(arg))
+) -> Option<(Args, String)> {
+    let Some(arg) = args.first() else {
+        return Some((Args::Pattern { str: String::new() }, String::new()))
+    };
+
+    // First try the specialized parsers, then fallback to our generic type handling.
+    parse_args_for_pattern(arg)
+        .or_else(|| parse_args_for_token_stream(arg))
+        .map(|t| (t, String::new()))
+        .or_else(|| {
+            let mut is_first = true;
+            let mut pat = String::new();
+            let mut code = String::new();
+
+            for arg in args {
+                if !is_first {
+                    pat.push_str(", ");
+                    code.push_str("\n");
+                }
+                is_first = false;
+                if let syn::FnArg::Typed(pat_type) = arg {
+                    if let syn::Pat::Ident(name) = &*pat_type.pat {
+                        let name_str = name.ident.to_string();
+                        let ty = &*pat_type.ty;
+                        let ty_str = quote! { #ty }.to_string();
+                        code.push_str(&format!("let mut {name_str}: {ty_str} = ("));
+
+                        // Use our helper to determine the pattern and code for the type.
+                        if let Some((param_pat, param_code)) = parse_arg_type(&name_str, ty) {
+                            pat.push_str(&param_pat);
+                            code.push_str(&param_code);
+                        }
+                        code.push_str(");");
+                    }
+                }
+                println!("!!!!!!!!!!!!!!!!!!\nPAT: '{}'\nCODE: '{}'", pat, code);
+            }
+            pat.push_str("$(,)?");
+            Some((Args::Pattern { str: pat }, code))
+        })
+}
+
+/// Returns (pattern, code) for a given type. It supports both vector types and non‑vector types.
+#[inline(always)]
+fn parse_arg_type(pfx: &str, ty: &syn::Type) -> Option<(String, String)> {
+    if let syn::Type::Path(type_path) = ty {
+        let last_segment = type_path.path.segments.last()?;
+        // If the type is Vec<T>, process T and then wrap the results in vector syntax.
+        if last_segment.ident == "Vec" {
+            if let syn::PathArguments::AngleBracketed(angle_bracketed) = &last_segment.arguments {
+                let generic_arg = angle_bracketed.args.first()?;
+                if let syn::GenericArgument::Type(inner_ty) = generic_arg {
+                    if let Some((inner_pat, inner_code)) = parse_inner_type(pfx, inner_ty) {
+                        let pat = format!("[$({}),*$(,)?]", inner_pat);
+                        let code = format!("[$({}),*].into_iter().collect()", inner_code);
+                        return Some((pat, code));
+                    }
+                }
+            }
+        } else {
+            // Non-vector: try to parse the type directly.
+            return parse_inner_type(pfx, ty);
+        }
+    }
+    None
+}
+
+/// Matches inner types. It supports:
+/// - References (for &str): yields pattern `"$arg:literal"` and code `"$arg"`
+/// - Owned strings (String): yields pattern `"$arg:expr"` and code `"$arg.to_string()"`
+/// - Integers (e.g. usize, u8, i32, etc.): yields pattern `"$arg:literal"` and code `"$arg"`
+#[inline(always)]
+fn parse_inner_type(pfx: &str, ty: &syn::Type) -> Option<(String, String)> {
+    let arg = format!("${pfx}_arg");
+    match ty {
+        // Match references, e.g. &str (with or without an explicit 'static lifetime)
+        syn::Type::Reference(ty_ref) => {
+            if let syn::Type::Path(inner_path) = &*ty_ref.elem {
+                if let Some(inner_seg) = inner_path.path.segments.last() {
+                    if inner_seg.ident == "str" {
+                        return Some((format!("{arg}:literal"), arg));
+                    }
+                }
+            }
+        },
+        // Match owned types: String or integer types.
+        syn::Type::Path(inner_type_path) => {
+            if let Some(inner_seg) = inner_type_path.path.segments.last() {
+                let ident_str = inner_seg.ident.to_string();
+                if ident_str == "String" {
+                    return Some((format!("{arg}:expr"), format!("{arg}.to_string()")));
+                } else if matches!(ident_str.as_str(),
+                    "usize" | "u8" | "u16" | "u32" | "u64" | "u128" |
+                    "isize" | "i8" | "i16" | "i32" | "i64" | "i128"
+                ) {
+                    return Some((format!("{arg}:literal"), arg));
+                }
+            }
+        },
+        _ => {}
+    }
+    None
 }
 
 fn parse_args_for_pattern(arg: &syn::FnArg) -> Option<Args> {
@@ -897,7 +996,6 @@ fn parse_output(output: &str) -> String {
 struct MacroOptions {
     pub cache: bool,
     pub content_base_name: bool,
-    pub prevent_duplicate_names: bool,
 }
 
 impl Default for MacroOptions {
@@ -905,7 +1003,6 @@ impl Default for MacroOptions {
         Self {
             cache: true,
             content_base_name: false,
-            prevent_duplicate_names: true,
         }
     }
 }
@@ -922,9 +1019,6 @@ impl syn::parse::Parse for MacroOptions {
             } else if ident == "content_base_name" {
                 let bool_lit: syn::LitBool = input.parse()?;
                 options.content_base_name = bool_lit.value;
-            } else if ident == "prevent_duplicate_names" {
-                let bool_lit: syn::LitBool = input.parse()?;
-                options.prevent_duplicate_names = bool_lit.value;
             } else {
                 return Err(syn::Error::new(ident.span(), "unknown attribute"));
             }
@@ -936,7 +1030,84 @@ impl syn::parse::Parse for MacroOptions {
     }
 }
 
-/// Function-like macro generation.
+// =====================
+// === Eval Function ===
+// =====================
+
+#[proc_macro_attribute]
+pub fn eval_fn(
+    attr: proc_macro::TokenStream,
+    item: proc_macro::TokenStream
+) -> proc_macro::TokenStream {
+    // SAFETY: Used to panic in case of error.
+    #[allow(clippy::unwrap_used)]
+    eval_fn_impl(attr, item).unwrap_or_compile_error().into()
+}
+
+
+fn eval_fn_impl(
+    attr: proc_macro::TokenStream,
+    item: proc_macro::TokenStream
+) -> Result<TokenStream> {
+    let options = syn::parse::<MacroOptions>(attr)?;
+    let start_time = get_current_time();
+    let timer = std::time::Instant::now();
+
+    let input_fn_ast = syn::parse::<syn::ItemFn>(item)?;
+    let name = &input_fn_ast.sig.ident.to_string();
+    let args_ast = &input_fn_ast.sig.inputs;
+    let body_ast = &input_fn_ast.block.stmts;
+
+    // if args_ast.len() > 1 { return err!("{WRONG_ARGS}"); }
+    let (args, args_code) = parse_args(&args_ast).context(|| error!(WRONG_ARGS))?;
+    let args_setup = args.setup(); // FIXME
+    let input_str = expand_quote_macro(expand_output_macro(quote!{ #(#body_ast)* })).to_string();
+    let input_str = format!("{args_setup}\n{input_str}");
+    let paths = Paths::new(options, name, &input_str)?;
+    debug!("REWRITTEN INPUT: {input_str}");
+
+
+    let mut cfg = CargoConfig::default();
+    if let Some(path) = &paths.cargo_toml_path {
+        cfg.fill_from_cargo_toml(path)?;
+    }
+    let attributes = cfg.extract_inline_attributes(input_fn_ast.attrs)?;
+    let include_token_stream_impl = cfg.contains_dependency("proc-macro2");
+    let input_code = prepare_input_code(&attributes, &input_str, include_token_stream_impl);
+    let mut output_dir_str = String::new();
+    let (output, was_cached) = paths.with_output_dir(options.cache, |output_dir| {
+        debug!("OUTPUT_DIR: {:?}", output_dir);
+        output_dir_str = output_dir.to_string_lossy().to_string();
+        let was_cached = create_project_skeleton(&output_dir, cfg, &input_code)?;
+        let output = run_cargo_project(&output_dir)?;
+        Ok((output, was_cached))
+    })?;
+
+    let output_code = parse_output(&output);
+    let duration = format_duration(timer.elapsed());
+    let options_doc = format!("{options:#?}").replace("\n", "\n/// ");
+    let mut macro_code = format!("
+        /// # Compilation Stats
+        /// Start: {start_time}
+        /// Duration: {duration}
+        /// Cached: {was_cached}
+        /// Output Dir: {output_dir_str}
+        /// Macro Options: {options_doc}
+        {output_code}
+    ");
+
+    debug!("BODY: {macro_code}");
+    let out: TokenStream = macro_code.parse()
+        .map_err(|err| error!("{err:?}"))
+        .context("Failed to parse generated code.")?;
+    debug!("OUTPUT : {out}");
+    Ok(out)
+}
+
+// ================
+// === Function ===
+// ================
+
 #[proc_macro_attribute]
 pub fn function(
     attr: proc_macro::TokenStream,
@@ -951,227 +1122,36 @@ fn function_impl(
     attr: proc_macro::TokenStream,
     item: proc_macro::TokenStream
 ) -> Result<TokenStream> {
-    let options = syn::parse::<MacroOptions>(attr)?;
-    let start_time = get_current_time();
-    let timer = std::time::Instant::now();
-
     let input_fn_ast = syn::parse::<syn::ItemFn>(item)?;
     let name = &input_fn_ast.sig.ident.to_string();
     let args_ast = &input_fn_ast.sig.inputs;
     let body_ast = &input_fn_ast.block.stmts;
 
-    if args_ast.len() > 1 { return err!("{WRONG_ARGS}"); }
-    let args = parse_args(&args_ast).context(|| error!(WRONG_ARGS))?;
+    // if args_ast.len() > 1 { return err!("{WRONG_ARGS}"); }
+    let (args, args_code) = parse_args(&args_ast).context(|| error!(WRONG_ARGS))?;
     let args_pattern = args.pattern();
-    let args_setup = args.setup();
-    let input_str = expand_quote_macro(expand_output_macro(quote!{ #(#body_ast)* })).to_string();
-    let input_str = format!("{args_setup}\n{input_str}");
-    let paths = Paths::new(options, name, &input_str)?;
-    debug!("REWRITTEN INPUT: {input_str}");
-
-
-    let mut cfg = CargoConfig::default();
-    if let Some(path) = &paths.cargo_toml_path {
-        cfg.fill_from_cargo_toml(path)?;
-    }
-    let attributes = cfg.extract_inline_attributes(input_fn_ast.attrs)?;
-    let include_token_stream_impl = cfg.contains_dependency("proc-macro2");
-    let input_code = prepare_input_code(&attributes, &input_str, include_token_stream_impl);
-    let mut output_dir_str = String::new();
-    let (output, was_cached) = paths.with_output_dir(options.cache, |output_dir| {
-        debug!("OUTPUT_DIR: {:?}", output_dir);
-        output_dir_str = output_dir.to_string_lossy().to_string();
-        let was_cached = create_project_skeleton(&output_dir, cfg, &input_code)?;
-        let output = run_cargo_project(&output_dir)?;
-        Ok((output, was_cached))
-    })?;
-
-    let output_code = parse_output(&output);
-    let duration = format_duration(timer.elapsed());
-    let options_doc = format!("{options:#?}").replace("\n", "\n/// ");
-    let mut macro_code = format!("
-        /// # Compilation Stats
-        /// Start: {start_time}
-        /// Duration: {duration}
-        /// Cached: {was_cached}
-        /// Output Dir: {output_dir_str}
-        /// Macro Options: {options_doc}
-        macro_rules! {name} {{
-            ({args_pattern}) => {{
-               {output_code}
-            }};
-        }}
-    ");
-    if options.prevent_duplicate_names {
-        macro_code.push_str(&format!("
-            /// Dummy function used to prevent duplicate names in the same module.
-            fn {CRATE}_{name}() {{}}
-        "));
-    }
-
-    debug!("BODY: {macro_code}");
-    let out: TokenStream = macro_code.parse()
-        .map_err(|err| error!("{err:?}"))
-        .context("Failed to parse generated code.")?;
-    debug!("OUTPUT : {out}");
-    Ok(out)
-}
-
-#[proc_macro_attribute]
-pub fn function3(
-    attr: proc_macro::TokenStream,
-    item: proc_macro::TokenStream
-) -> proc_macro::TokenStream {
-    // SAFETY: Used to panic in case of error.
-    #[allow(clippy::unwrap_used)]
-    function3_impl(attr, item).unwrap_or_compile_error().into()
-}
-
-
-fn function3_impl(
-    attr: proc_macro::TokenStream,
-    item: proc_macro::TokenStream
-) -> Result<TokenStream> {
-    let options = syn::parse::<MacroOptions>(attr)?;
-    let start_time = get_current_time();
-    let timer = std::time::Instant::now();
-
-    let input_fn_ast = syn::parse::<syn::ItemFn>(item)?;
-    let name = &input_fn_ast.sig.ident.to_string();
-    let args_ast = &input_fn_ast.sig.inputs;
-    let body_ast = &input_fn_ast.block.stmts;
-
-    if args_ast.len() > 1 { return err!("{WRONG_ARGS}"); }
-    let args = parse_args(&args_ast).context(|| error!(WRONG_ARGS))?;
-    let args_pattern = args.pattern();
-    let args_setup = args.setup();
-    let input_str = expand_quote_macro(expand_output_macro(quote!{ #(#body_ast)* })).to_string();
-    let input_str = format!("{args_setup}\n{input_str}");
-    let paths = Paths::new(options, name, &input_str)?;
-    debug!("REWRITTEN INPUT: {input_str}");
-
-
-    let mut cfg = CargoConfig::default();
-    if let Some(path) = &paths.cargo_toml_path {
-        cfg.fill_from_cargo_toml(path)?;
-    }
-    let attributes = cfg.extract_inline_attributes(input_fn_ast.attrs)?;
-    let include_token_stream_impl = cfg.contains_dependency("proc-macro2");
-    let input_code = prepare_input_code(&attributes, &input_str, include_token_stream_impl);
-    let mut output_dir_str = String::new();
-    let (output, was_cached) = paths.with_output_dir(options.cache, |output_dir| {
-        debug!("OUTPUT_DIR: {:?}", output_dir);
-        output_dir_str = output_dir.to_string_lossy().to_string();
-        let was_cached = create_project_skeleton(&output_dir, cfg, &input_code)?;
-        let output = run_cargo_project(&output_dir)?;
-        Ok((output, was_cached))
-    })?;
-
-    let output_code = parse_output(&output);
-    let duration = format_duration(timer.elapsed());
-    let options_doc = format!("{options:#?}").replace("\n", "\n/// ");
-    let mut macro_code = format!("
-        /// # Compilation Stats
-        /// Start: {start_time}
-        /// Duration: {duration}
-        /// Cached: {was_cached}
-        /// Output Dir: {output_dir_str}
-        /// Macro Options: {options_doc}
-        const _: () = ();
-        {output_code}
-    ");
-    // if options.prevent_duplicate_names {
-    //     macro_code.push_str(&format!("
-    //         /// Dummy function used to prevent duplicate names in the same module.
-    //         fn {CRATE}_{name}() {{}}
-    //     "));
-    // }
-
-    debug!("BODY: {macro_code}");
-    let out: TokenStream = macro_code.parse()
-        .map_err(|err| error!("{err:?}"))
-        .context("Failed to parse generated code.")?;
-    debug!("OUTPUT : {out}");
-    Ok(out)
-}
-
-#[proc_macro_attribute]
-pub fn function2(
-    attr: proc_macro::TokenStream,
-    item: proc_macro::TokenStream
-) -> proc_macro::TokenStream {
-    // SAFETY: Used to panic in case of error.
-    #[allow(clippy::unwrap_used)]
-    function2_impl(attr, item).unwrap_or_compile_error().into()
-}
-fn function2_impl(
-    attr: proc_macro::TokenStream,
-    item: proc_macro::TokenStream
-) -> Result<TokenStream> {
-    // let options = syn::parse::<MacroOptions>(attr)?;
-    //
-    let input_fn_ast = syn::parse::<syn::ItemFn>(item)?;
-    let name = &input_fn_ast.sig.ident.to_string();
-    let args_ast = &input_fn_ast.sig.inputs;
-    let body_ast = &input_fn_ast.block.stmts;
-    //
-    if args_ast.len() > 1 { return err!("{WRONG_ARGS}"); }
-    let args = parse_args(&args_ast).context(|| error!(WRONG_ARGS))?;
-    let args_pattern = args.pattern();
-    // let args_setup = args.setup();
     let input_str = expand_arg_macro(quote!{ #(#body_ast)* });
-    // let input_str = format!("{args_setup}\n{input_str}");
-    // let paths = Paths::new(options, name, &input_str)?;
-    // debug!("REWRITTEN INPUT: {input_str}");
-    //
-    //
-    // let mut cfg = CargoConfig::default();
-    // if let Some(path) = &paths.cargo_toml_path {
-    //     cfg.fill_from_cargo_toml(path)?;
-    // }
-    // let attributes = cfg.extract_inline_attributes(input_fn_ast.attrs)?;
-    // let include_token_stream_impl = cfg.contains_dependency("proc-macro2");
-    // let input_code = prepare_input_code(&attributes, &input_str, include_token_stream_impl);
-    // let mut output_dir_str = String::new();
-    // let (output, was_cached) = paths.with_output_dir(options.cache, |output_dir| {
-    //     debug!("OUTPUT_DIR: {:?}", output_dir);
-    //     output_dir_str = output_dir.to_string_lossy().to_string();
-    //     let was_cached = create_project_skeleton(&output_dir, cfg, &input_code)?;
-    //     let output = run_cargo_project(&output_dir)?;
-    //     Ok((output, was_cached))
-    // })?;
-    //
-    // let output_code = parse_output(&output);
-    // let duration = format_duration(timer.elapsed());
-    // let options_doc = format!("{options:#?}").replace("\n", "\n/// ");
 
-    // let body_code = quote!{ #(#body_ast)* };
+    let attrs_vec = input_fn_ast.attrs;
+    let attrs = quote!{ #(#attrs_vec)* };
     let mut macro_code = format!("
         macro_rules! {name} {{
             ({args_pattern}) => {{
-                #[crabtime::function3]
+                #[crabtime::eval_fn({attr})]
                 fn {name}() {{
+                    {attrs}
+                    {args_code}
                     {input_str}
                 }}
             }};
         }}
     ");
-    // {output_code}
-    // if options.prevent_duplicate_names {
-    //     macro_code.push_str(&format!("
-    //         /// Dummy function used to prevent duplicate names in the same module.
-    //         fn {CRATE}_{name}() {{}}
-    //     "));
-    // }
-    //
-    // debug!("BODY: {macro_code}");
+
     let out: TokenStream = macro_code.parse()
         .map_err(|err| error!("{err:?}"))
         .context("Failed to parse generated code.")?;
     debug!("OUTPUT : {out}");
     Ok(out)
-
-    // Ok(quote!{})
 }
 
 fn format_duration(duration: std::time::Duration) -> String {
