@@ -3,7 +3,7 @@
 
 mod error;
 
-use std::fmt::{Debug, Display};
+use std::fmt::Debug;
 use proc_macro2::Delimiter;
 use proc_macro2::LineColumn;
 use proc_macro2::Span;
@@ -18,7 +18,6 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::process::Command;
 use std::default::Default;
-use std::error::Error;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::Hash;
 use std::hash::Hasher;
@@ -36,17 +35,6 @@ const DEFAULT_EDITION: &str = "2024";
 const DEFAULT_RESOLVER: &str = "3";
 const GEN_MOD: &str = CRATE;
 const OUTPUT_PREFIX: &str = "[OUTPUT]";
-
-/// Rust keywords for special handling. This is not needed for this macro to work, it is only used
-/// to make `IntelliJ` / `RustRover` work correctly, as their `TokenStream` spans are incorrect.
-const KEYWORDS: &[&str] = &[
-    "as", "async", "await", "break", "const", "continue", "crate", "dyn", "else", "enum",
-    "extern", "false", "fn", "for", "if", "impl", "in", "let", "loop", "match", "mod", "move",
-    "mut", "pub", "ref", "return", "self", "Self", "static", "struct", "super", "trait", "true",
-    "type", "unsafe", "use", "where", "while", "abstract", "become", "box", "do", "final", "macro",
-    "override", "priv", "typeof", "unsized", "virtual", "yield", "try",
-];
-
 const OUT_DIR: &str = env!("OUT_DIR");
 
 // ==================
@@ -79,7 +67,7 @@ impl TokenRange {
 fn gen_prelude(include_token_stream_impl: bool) -> String {
     let warning_prefix = Level::WARNING_PREFIX;
     let error_prefix = Level::ERROR_PREFIX;
-    let prelud_ts = if include_token_stream_impl { PRELUDE_FOR_TOKEN_STREAM } else { "" };
+    let prelude_tok_stream = if include_token_stream_impl { PRELUDE_FOR_TOKEN_STREAM } else { "" };
     format!("
         mod {GEN_MOD} {{
             #![allow(clippy::all)]
@@ -110,7 +98,7 @@ fn gen_prelude(include_token_stream_impl: bool) -> String {
             pub(super) use error;
 
             {PRELUDE_STATIC}
-            {prelud_ts}
+            {prelude_tok_stream}
         }}
 
         {PRELUDE_MAGIC}
@@ -338,7 +326,7 @@ fn project_name_from_input(input_str: &str) -> String {
 #[derive(Debug)]
 struct CargoConfigPaths {
     crate_config: PathBuf,
-    workspace_config: Option<PathBuf>,
+    _workspace_config: Option<PathBuf>,
 }
 
 fn find_cargo_configs(path: &PathBuf) -> Result<CargoConfigPaths> {
@@ -352,12 +340,12 @@ fn find_cargo_configs(path: &PathBuf) -> Result<CargoConfigPaths> {
     if out.len() >= 2 {
         Ok(CargoConfigPaths {
             crate_config: out[0].clone(),
-            workspace_config: Some(out[1].clone()),
+            _workspace_config: Some(out[1].clone()),
         })
     } else if out.len() >= 1 {
         Ok(CargoConfigPaths {
             crate_config: out[0].clone(),
-            workspace_config: None,
+            _workspace_config: None,
         })
     } else {
         err!("No 'Cargo.toml' files found in parent directories of '{}'.", path.display())
@@ -648,33 +636,20 @@ struct PrintOutput {
     end_token: Option<LineColumn>,
 }
 
-// Used to indicate that `{{` and `}}` was already collapsed to `{` and `}`. So, for example, the
-// following transformations will be performed:
-// `{ {{a}} }` -> `{ {{{a}}} }` -> `{ %%%{a}%%% }` -> `{{ %%%{a}%%% }}` -> `{{ {a} }}`
-const SPACER: &str = "%%%";
-
-/// Prints the token stream as a string ready to be used by the format macro. The following
-/// transformations are performed:
-/// - A trailing space is added after printing each token.
-/// - If `prev_token.line == next_token.line` and `prev_token.end_column >= next_token.start_column`,
-///   the prev token trailing space is removed. This basically preserves spaces from the input code,
-///   which is needed to distinguish between such inputs as `MyName{x}`, `MyName {x}`, etc.
-///   The `>=` is used because sometimes a few tokens can have the same start column. For example,
-///   for lifetimes (`'t`), the apostrophe and the lifetime ident have the same start column.
-/// - Every occurrence of `{{` and `}}` is replaced with `{` and `}` respectively. Also, every
-///   occurrence of `{` and `}` is replaced with `{{` and `}}` respectively. This prepares the
-///   string to be used in the format macro.
-///
-/// There is also a special transformation for `IntellIJ` / `RustRover`. Their spans are different from
-/// rustc ones, so sometimes tokens are glued together. This is why we discover Rust keywords and add
-/// additional spacing around. This is probably not covering all the bugs. If there will be a bug
-/// report, this is the place to look at.
+/// Prints the token stream as a string ready to be used by the format macro. It is very careful
+/// where spaces are inserted. In particular, spaces are not inserted around `{` and `}` tokens if
+/// they were not present in the original token stream. It is fine-tuned to work in different IDEs,
+/// such as RustRover.
 fn print_tokens(tokens: &TokenStream) -> String {
-    // print_tokens_internal(tokens).output.replace("{%%%", "{ %%%").replace("%%%}", "%%% }").replace(SPACER, "")
-    print_tokens_internal2(tokens).output.replace("{", "{{").replace("}", "}}").replace("{{{{", "{").replace("}}}}", "}")
+    // Replaces `{` with `{{` and vice versa.
+    print_tokens_internal(tokens).output
+        .replace("{", "{{")
+        .replace("}", "}}")
+        .replace("{{{{", "{")
+        .replace("}}}}", "}")
 }
 
-fn print_tokens_internal2(tokens: &TokenStream) -> PrintOutput {
+fn print_tokens_internal(tokens: &TokenStream) -> PrintOutput {
     let token_vec: Vec<TokenTree> = tokens.clone().into_iter().collect();
     let mut output = String::new();
     let mut first_token_start = None;
@@ -684,11 +659,10 @@ fn print_tokens_internal2(tokens: &TokenStream) -> PrintOutput {
         let mut add_space = true;
         let mut token_start = token.span().start();
         let mut token_end = token.span().end();
-        // let mut is_keyword = false;
         let mut is_brace = false;
         let token_str = match token {
             TokenTree::Group(g) => {
-                let content = print_tokens_internal2(&g.stream());
+                let content = print_tokens_internal(&g.stream());
                 let mut content_str = content.output;
                 content_str.pop();
                 let (open, close) = match g.delimiter() {
@@ -714,11 +688,7 @@ fn print_tokens_internal2(tokens: &TokenStream) -> PrintOutput {
 
                 format!("{open}{content_str}{close}")
             }
-            TokenTree::Ident(ident) => {
-                let str = ident.to_string();
-                // is_keyword = KEYWORDS.contains(&str.as_str());
-                str
-            },
+            TokenTree::Ident(ident) => ident.to_string(),
             TokenTree::Literal(lit) => lit.to_string(),
             TokenTree::Punct(punct) => {
                 let str = punct.as_char().to_string();
@@ -732,93 +702,19 @@ fn print_tokens_internal2(tokens: &TokenStream) -> PrintOutput {
 
         if is_brace || prev_token_was_brace {
             if let Some(prev_token_end) = prev_token_end {
-                if prev_token_end.line == token_start.line && prev_token_end.column >= token_start.column {
-                    if output.ends_with(" ") {
-                        output.pop();
-                    }
+                if prev_token_end.line == token_start.line
+                && prev_token_end.column >= token_start.column
+                && output.ends_with(" ") {
+                    output.pop();
                 }
             }
         }
         prev_token_was_brace = is_brace;
 
-        // Pushing a space before and after keywords is for IntelliJ only. Their token spans are invalid.
         output.push_str(&token_str);
         if add_space {
             output.push(' ');
         }
-
-        first_token_start.get_or_insert(token_start);
-        prev_token_end = Some(token_end);
-    }
-    PrintOutput {
-        output,
-        start_token: first_token_start,
-        end_token: prev_token_end,
-    }
-}
-
-fn print_tokens_internal(tokens: &TokenStream) -> PrintOutput {
-    let token_vec: Vec<TokenTree> = tokens.clone().into_iter().collect();
-    let mut output = String::new();
-    let mut first_token_start = None;
-    let mut prev_token_end: Option<LineColumn> = None;
-    for (i, token) in token_vec.iter().enumerate() {
-        let mut token_start = token.span().start();
-        let mut token_end = token.span().end();
-        let mut is_keyword = false;
-        let token_str = match token {
-            TokenTree::Group(g) => {
-                let content = print_tokens_internal(&g.stream());
-                let mut content_str = content.output;
-                content_str.pop();
-                let (open, close) = match g.delimiter() {
-                    Delimiter::Brace =>{
-                        if content_str.starts_with('{') && content_str.ends_with('}') {
-                            // We already replaced the internal `{` and `}` with `{{` and `}}`.
-                            content_str.pop();
-                            content_str.remove(0);
-                            (SPACER, SPACER)
-                        } else {
-                            ("{{", "}}")
-                        }
-                    },
-                    Delimiter::Parenthesis => ("(", ")"),
-                    Delimiter::Bracket => ("[", "]"),
-                    _ => ("", ""),
-                };
-
-                if let Some(content_first_token_start) = content.start_token {
-                    token_start.line = content_first_token_start.line;
-                    if content_first_token_start.column > 0 {
-                        token_start.column = content_first_token_start.column - 1;
-                    }
-                }
-                if let Some(content_end) = content.end_token {
-                    token_end.line = content_end.line;
-                    token_end.column = content_end.column + 1;
-                }
-                format!("{open}{content_str}{close}")
-            }
-            TokenTree::Ident(ident) => {
-                let str = ident.to_string();
-                is_keyword = KEYWORDS.contains(&str.as_str());
-                str
-            },
-            TokenTree::Literal(lit) => lit.to_string(),
-            TokenTree::Punct(punct) => punct.as_char().to_string(),
-        };
-        debug!("{i}: [{token_start:?}-{token_end:?}] [{prev_token_end:?}]: {token}");
-        if let Some(prev_token_end) = prev_token_end {
-            if prev_token_end.line == token_start.line && prev_token_end.column >= token_start.column {
-                output.pop();
-            }
-        }
-
-        // Pushing a space before and after keywords is for IntelliJ only. Their token spans are invalid.
-        if is_keyword { output.push(' '); }
-        output.push_str(&token_str);
-        output.push(' ');
-        if is_keyword { output.push(' '); }
 
         first_token_start.get_or_insert(token_start);
         prev_token_end = Some(token_end);
@@ -925,17 +821,12 @@ fn parse_arg_type(pfx: &str, ty: &syn::Type) -> Option<(TokenStream, TokenStream
     None
 }
 
-/// Matches inner types. It supports:
-/// - References (for &str): yields pattern `"$arg:literal"` and code `"$arg"`
-/// - Owned strings (String): yields pattern `"$arg:expr"` and code `"$arg.to_string()"`
-/// - Integers (e.g. usize, u8, i32, etc.): yields pattern `"$arg:literal"` and code `"$arg"`
 #[inline(always)]
 fn parse_inner_type(pfx: &str, ty: &syn::Type) -> Option<(TokenStream, TokenStream)> {
     let arg_str = format!("{pfx}_arg");
     let arg_ident = syn::Ident::new(&arg_str, Span::call_site());
     let arg = quote! {$#arg_ident};
     match ty {
-        // Match references, e.g. &str (with or without an explicit 'static lifetime)
         syn::Type::Reference(ty_ref) => {
             if let syn::Type::Path(inner_path) = &*ty_ref.elem {
                 if let Some(inner_seg) = inner_path.path.segments.last() {
@@ -945,7 +836,6 @@ fn parse_inner_type(pfx: &str, ty: &syn::Type) -> Option<(TokenStream, TokenStre
                 }
             }
         },
-        // Match owned types: String or integer types.
         syn::Type::Path(inner_type_path) => {
             if let Some(inner_seg) = inner_type_path.path.segments.last() {
                 let ident_str = inner_seg.ident.to_string();
@@ -984,7 +874,6 @@ const WRONG_ARGS: &str = "Function should have zero or one argument, one of:
     - `pattern!(<pattern>): _`, where <pattern> is a `macro_rules!` pattern
     - `input: TokenStream`
 ";
-
 
 fn prepare_input_code(attributes:&str, body: &str, include_token_stream_impl: bool) -> String {
     let body_esc: String = body.chars().flat_map(|c| c.escape_default()).collect();
@@ -1087,17 +976,9 @@ fn eval_fn_impl(
 
     let input_fn_ast = syn::parse::<syn::ItemFn>(item)?;
     let name = &input_fn_ast.sig.ident.to_string();
-    let args_ast = &input_fn_ast.sig.inputs;
     let body_ast = &input_fn_ast.block.stmts;
-
-    // if args_ast.len() > 1 { return err!("{WRONG_ARGS}"); }
-
-    // let (args, args_code) = parse_args(&args_ast).context(|| error!(WRONG_ARGS))?;
-    // let args_setup = args.setup(); // FIXME
     let input_str = expand_output_macro(expand_quote_macro(quote!{ #(#body_ast)* })).to_string();
-    // let input_str = format!("{args_setup}\n{input_str}");
     let paths = Paths::new(options, name, &input_str)?;
-    // panic!("REWRITTEN INPUT: {input_str}");
 
     let mut cfg = CargoConfig::default();
     if let Some(path) = &paths.cargo_toml_path {
@@ -1118,7 +999,7 @@ fn eval_fn_impl(
     let output_code = parse_output(&output);
     let duration = format_duration(timer.elapsed());
     let options_doc = format!("{options:#?}").replace("\n", "\n/// ");
-    let mut macro_code = format!("
+    let macro_code = format!("
         /// # Compilation Stats
         /// Start: {start_time}
         /// Duration: {duration}
@@ -1129,11 +1010,11 @@ fn eval_fn_impl(
         {output_code}
     ");
 
-    // panic!("BODY: {macro_code}");
+    debug!("BODY: {macro_code}");
     let out: TokenStream = macro_code.parse()
         .map_err(|err| error!("{err:?}"))
         .context("Failed to parse generated code.")?;
-    // panic!("OUTPUT: {out} ");
+    debug!("OUTPUT: {out} ");
     Ok(out)
 }
 
@@ -1155,56 +1036,25 @@ fn function_impl(
     attr_in: proc_macro::TokenStream,
     item: proc_macro::TokenStream
 ) -> Result<TokenStream> {
-    let item_str: TokenStream = item.clone().into();
     let attr: TokenStream = attr_in.into();
     let input_fn_ast = syn::parse::<syn::ItemFn>(item)?;
-    // let name = &input_fn_ast.sig.ident.to_string();
     let name = &input_fn_ast.sig.ident;
     let args_ast = &input_fn_ast.sig.inputs;
     let body_ast = &input_fn_ast.block.stmts;
 
-    // if args_ast.len() > 1 { return err!("{WRONG_ARGS}"); }
     let (args, args_code) = parse_args(&args_ast).context(|| error!(WRONG_ARGS))?;
+    let args_pattern = args.pattern();
+    let args_setup = args.setup();
+    let body = quote!{ #(#body_ast)* };
+    let input_str = expand_expand_macro(quote!{ #(#body_ast)* });
 
-    // let args_setup = quote! {
-    //     let ARGS_AS_STR: String = #args_setup_pat;
-    // };
-    // let args_setup = if let Args::TokenStream { ident } = &args {
-    //     quote! {
-    //         use proc_macro2::TokenStream;
-    //         let #ident: TokenStream = stringify!().parse().unwrap();
-    //     }
-    // } else {
-    //     quote! {}
-    // };
-    let exe_path = std::env::current_exe()?;
-    // Extract the file name from the path.
-    let program_name = exe_path
+    // Check if the expansion engine is Rust Analyzer. If so, we need to generate
+    // a code which looks like a function to enable type hints.
+    let program_name = std::env::current_exe()?
         .file_name()
         .map(|s| s.to_string_lossy().into_owned())
         .unwrap_or_else(|| "unknown".into());
-
-    // Open /tmp/names.txt for appending, create it if it doesn't exist.
-    let file_path = Path::new("/tmp/names.txt");
-    let mut file = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(file_path)?;
-
-    // Write the program name followed by a newline.
-    writeln!(file, "{}", program_name)?;
-
-
-
-
-    let args_pattern = args.pattern();
-    let args_setup = args.setup();
-    // panic!("{}", quote!{ #(#body_ast)* });
-    let body = quote!{ #(#body_ast)* };
-    let input_str = expand_expand_macro(quote!{ #(#body_ast)* });
-    // panic!("{}", input_str);
-
-    let xxx = if program_name.contains("rust-analyzer") {
+    let rust_analyzer_hints = if program_name.contains("rust-analyzer") {
         quote! {
             #[cfg(debug_assertions)]
             mod trashtime {
@@ -1223,10 +1073,7 @@ fn function_impl(
     let attrs = quote!{ #(#attrs_vec)* };
     #[cfg(not(test))]
     let out = quote! {
-
-
-        #xxx
-
+        #rust_analyzer_hints
         macro_rules! #name {
             (@ [$($__input__:tt)*] #args_pattern) => {
                 #[crabtime::eval_fn(#attr)]
@@ -1246,11 +1093,7 @@ fn function_impl(
             };
         }
     };
-
-    // let out: TokenStream = macro_code.parse()
-    //     .map_err(|err| error!("{err:?}"))
-    //     .context("Failed to parse generated code.")?;
-    // panic!("OUTPUT : {out}");
+    debug!("OUTPUT : {out}");
     Ok(out)
 }
 
@@ -1279,17 +1122,6 @@ fn get_current_time() -> String {
     format!("{hours:02}:{minutes:02}:{seconds:02} ({milliseconds:03})")
 }
 
-#[proc_macro_attribute]
-pub fn trash(
-    attr: proc_macro::TokenStream,
-    item: proc_macro::TokenStream
-) -> proc_macro::TokenStream {
-    let item2: TokenStream = item.into();
-    quote!{ fn trash() {
-        #item2
-    } }.into()
-}
-
 // TODO: typed function output
 // TODO: get lints from Cargo
 // TODO: support workspaces, for edition and dependencies or is it done automatically for edition?
@@ -1301,5 +1133,6 @@ pub fn trash(
 //         }
 //     }
 // TODO: removing project can cause another process to fail - after compilation, another process might already acquire lock
+// TODO: Remove warnings from gen code
 
 
