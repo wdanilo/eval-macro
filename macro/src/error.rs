@@ -67,7 +67,7 @@ pub(crate) struct Issue {
 
 impl Issue {
     pub fn msg(level: Level, span: Option<Span>, message: String) -> Self {
-        Self { level, span, message: message.into(), context: None }
+        Self { level, span, message, context: None }
     }
 
     pub fn context(mut self, f: impl FnOnce() -> Issue) -> Self {
@@ -86,7 +86,7 @@ impl Issue {
     #[cfg(nightly)]
     pub fn emit(&self) {
         // SAFETY: This unwrap is safe in proc macros.
-        let span = self.span.clone().unwrap_or_else(|| Span::call_site()).unwrap();
+        let span = self.span.unwrap_or_else(Span::call_site).unwrap();
         let level = self.level.into();
         let message = self.message_with_cause();
         proc_macro::Diagnostic::spanned(span, level, message).emit();
@@ -95,7 +95,7 @@ impl Issue {
     // This is a hack to make compile errors with spans on stable.
     // Source: https://stackoverflow.com/questions/54392702/how-to-report-errors-in-a-procedural-macro-using-the-quote-macro
     pub fn compile_error(&self) -> TokenStream {
-        let span = self.span.clone().unwrap_or_else(|| Span::call_site());
+        let span = self.span.unwrap_or_else(Span::call_site);
         let message = self.message_with_cause();
         quote::quote_spanned! { span => compile_error!(#message) }
     }
@@ -103,7 +103,7 @@ impl Issue {
 
 impl<E: Debug> From<E> for Issue {
     fn from(e: E) -> Self {
-        Self::msg(Level::Error, None, format!("{:?}", e))
+        Self::msg(Level::Error, None, format!("{e:?}"))
     }
 }
 
@@ -163,7 +163,7 @@ impl<T, E: Debug> Context<T, &'static str> for Result<T, E> {
 impl<T, I> Context<T, I> for Option<T> where
 I: FnOnce() -> Issue {
     fn context(self, issue: I) -> Result<T> {
-        self.ok_or_else(|| issue())
+        self.ok_or_else(issue)
     }
 }
 

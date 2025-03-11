@@ -9,7 +9,7 @@
 //! **Crabtime** offers a novel way to write Rust macros, inspired by
 //! [Zig's comptime](zigs_comptime). It provides even more flexibility and power than procedural
 //! macros, while remaining easier and more natural to read and write than
-//! [macro_rules!](macro_rules).
+//! [`macro_rules!`](macro_rules).
 //!
 //! <br/>
 //! <br/>
@@ -299,7 +299,7 @@
 //! <h5><b>Input by using patterns</b></h5>
 //!
 //! In case you want even more control, you can use the same patterns as
-//! [macro_rules!](macro_rules) by using a special `pattern!` macro, and you can expand any pattern
+//! [`macro_rules!`](macro_rules) by using a special `pattern!` macro, and you can expand any pattern
 //! using the `expand!` macro:
 //!
 //! <div style="background-color:#397be440; padding: 8px; border-radius: 8px; margin-bottom: 8px;">
@@ -367,7 +367,7 @@
 //! Rust channel, Crabtime and procedural macros have the same performance. On the stable channel,
 //! Crabtime requires slightly more time than a procedural macro after you change your macro
 //! definition. In other words, Crabtime’s performance is similar to procedural macros. It has
-//! higher compilation overhead than [macro_rules!](macro_rules) but processes tokens and complex
+//! higher compilation overhead than [`macro_rules!`](macro_rules) but processes tokens and complex
 //! transformations faster.
 //!
 //! |                                            | <div style="width:200px">Proc Macro</div> | <div style="width:200px">Crabtime</div>               | <div style="width:200px"><code>macro_rules!</code></div> |
@@ -765,3 +765,16 @@ mod tests {
         empty_def_compilation!();
     }
 }
+
+#[crabtime::function]
+fn my_macro_expansion4() {
+    let components = ["X", "Y", "Z", "W"];
+    for (ix, name) in components.iter().enumerate() {
+        let dim = ix + 1;
+        let cons = components[0..dim].join(",");
+        println!("[OUTPUT] enum Position{dim} {{");
+        println!("[OUTPUT]     {cons}");
+        println!("[OUTPUT] }}");
+    }
+}
+my_macro_expansion4!();

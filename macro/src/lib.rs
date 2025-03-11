@@ -56,7 +56,7 @@ impl TokenRange {
     fn span(&self) -> Span {
         let first_span = self.start.span();
         let last_span = self.end.span();
-        first_span.join(last_span).unwrap_or_else(|| first_span)
+        first_span.join(last_span).unwrap_or(first_span)
     }
 }
 
@@ -329,8 +329,8 @@ struct CargoConfigPaths {
     _workspace_config: Option<PathBuf>,
 }
 
-fn find_cargo_configs(path: &PathBuf) -> Result<CargoConfigPaths> {
-    let mut current_path = path.clone();
+fn find_cargo_configs(path: &Path) -> Result<CargoConfigPaths> {
+    let mut current_path = path.to_path_buf();
     let mut out = Vec::new();
     loop {
         let candidate = current_path.join("Cargo.toml");
@@ -342,7 +342,7 @@ fn find_cargo_configs(path: &PathBuf) -> Result<CargoConfigPaths> {
             crate_config: out[0].clone(),
             _workspace_config: Some(out[1].clone()),
         })
-    } else if out.len() >= 1 {
+    } else if !out.is_empty() {
         Ok(CargoConfigPaths {
             crate_config: out[0].clone(),
             _workspace_config: None,
@@ -482,8 +482,8 @@ fn get_host_target() -> Result<String> {
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     for line in stdout.lines() {
-        if line.starts_with("host:") {
-            return Ok(line["host:".len()..].trim().to_string());
+        if let Some(stripped) = line.strip_prefix("host:") {
+            return Ok(stripped.trim().to_string())
         }
     }
     err!("Could not determine host target from rustc")
@@ -504,6 +504,7 @@ fn run_cargo_project(project_dir: &PathBuf) -> Result<String> {
         let stderr = String::from_utf8_lossy(&output.stderr);
         // TODO: Parse it and map gen code spans to call site spans.
         eprintln!("{stderr}");
+        #[allow(clippy::panic)]
         if let Some(index) = stderr.find("thread 'main' panicked") {
             panic!("{}", &stderr[index..]);
         }
@@ -519,7 +520,6 @@ fn run_cargo_project(project_dir: &PathBuf) -> Result<String> {
 
 /// Find and expand the `output!` macro in the input `TokenStream`. After this lib stabilizes, this
 /// should be rewritten to standard macro and imported by the generated code.
-
 fn expand_expand_macro(input: TokenStream) -> TokenStream {
     let tokens: Vec<TokenTree> = input.into_iter().collect();
     let mut output = TokenStream::new();
@@ -639,7 +639,7 @@ struct PrintOutput {
 /// Prints the token stream as a string ready to be used by the format macro. It is very careful
 /// where spaces are inserted. In particular, spaces are not inserted around `{` and `}` tokens if
 /// they were not present in the original token stream. It is fine-tuned to work in different IDEs,
-/// such as RustRover.
+/// such as `RustRover`.
 fn print_tokens(tokens: &TokenStream) -> String {
     // Replaces `{` with `{{` and vice versa.
     print_tokens_internal(tokens).output
@@ -899,14 +899,14 @@ fn parse_output(output: &str) -> String {
     let mut code = String::new();
     for line in output.split('\n') {
         let line_trimmed = line.trim();
-        if line_trimmed.starts_with(OUTPUT_PREFIX) {
-            code.push_str(&line_trimmed[OUTPUT_PREFIX.len()..]);
+        if let Some(stripped) = line_trimmed.strip_prefix(OUTPUT_PREFIX) {
+            code.push_str(stripped);
             code.push('\n');
-        } else if line_trimmed.starts_with(Level::WARNING_PREFIX) {
-            print_warning!("{}", &line_trimmed[Level::WARNING_PREFIX.len()..]);
-        } else if line_trimmed.starts_with(Level::ERROR_PREFIX) {
-            print_error!("{}", &line_trimmed[Level::ERROR_PREFIX.len()..]);
-        } else if line_trimmed.len() > 0 {
+        } else if let Some(stripped) = line_trimmed.strip_prefix(Level::WARNING_PREFIX) {
+            print_warning!("{}", stripped);
+        } else if let Some(stripped) = line_trimmed.strip_prefix(Level::ERROR_PREFIX) {
+            print_error!("{}", stripped);
+        } else if !line_trimmed.is_empty() {
             println!("{line}");
         }
     }
@@ -992,8 +992,8 @@ fn eval_fn_impl(
     let (output, was_cached) = paths.with_output_dir(options.cache, |output_dir| {
         debug!("OUTPUT_DIR: {:?}", output_dir);
         output_dir_str = output_dir.to_string_lossy().to_string();
-        let was_cached = create_project_skeleton(&output_dir, cfg, &input_code)?;
-        let output = run_cargo_project(&output_dir)?;
+        let was_cached = create_project_skeleton(output_dir, cfg, &input_code)?;
+        let output = run_cargo_project(output_dir)?;
         Ok((output, was_cached))
     })?;
     let output_code = parse_output(&output);
@@ -1042,7 +1042,7 @@ fn function_impl(
     let args_ast = &input_fn_ast.sig.inputs;
     let body_ast = &input_fn_ast.block.stmts;
 
-    let (args, args_code) = parse_args(&args_ast).context(|| error!(WRONG_ARGS))?;
+    let (args, args_code) = parse_args(args_ast).context(|| error!(WRONG_ARGS))?;
     let args_pattern = args.pattern();
     let args_setup = args.setup();
     let body = quote!{ #(#body_ast)* };
@@ -1052,8 +1052,7 @@ fn function_impl(
     // a code which looks like a function to enable type hints.
     let program_name = std::env::current_exe()?
         .file_name()
-        .map(|s| s.to_string_lossy().into_owned())
-        .unwrap_or_else(|| "unknown".into());
+        .map_or_else(|| "unknown".into(), |s| s.to_string_lossy().into_owned());
     let rust_analyzer_hints = if program_name.contains("rust-analyzer") {
         quote! {
             #[cfg(debug_assertions)]
@@ -1102,7 +1101,7 @@ fn format_duration(duration: std::time::Duration) -> String {
     if total_seconds >= 60 {
         let minutes = total_seconds / 60;
         let seconds = total_seconds % 60;
-        format!("{}m {}s", minutes, seconds)
+        format!("{minutes}m {seconds}s")
     } else {
         let millis = duration.as_millis() % 1000;
         let fractional = millis as f64 / 1000.0;
