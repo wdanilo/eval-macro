@@ -75,8 +75,9 @@
 //! Use the `crabtime::function` attribute to define a new [function-like macro][fn_like_macros].
 //! Crabtime will remove the annotated function and replace it with a macro definition of the same
 //! name. You can then call the macro to compile and execute the function at build time, and use
-//! its output as the generated Rust code. Let's start with a simple example, and let's refine it
-//! down the line. Let's generate the following Rust code:
+//! its output as the generated Rust code. You can also use the standard `#[macro_export]`
+//! attribute to export your macro. Let's start with a simple example, and let's refine it down
+//! the line. Let's generate the following Rust code:
 //!
 //! ```
 //! enum Position1 { X }
@@ -90,7 +91,8 @@
 //! ```
 //! // Replaces the function definition with a `gen_positions1!` macro.
 //! #[crabtime::function]
-//! fn gen_positions1() {
+//! #[macro_export] // <- This is how you export it!
+//! fn gen_positions1() -> &str {
 //!     "
 //!     enum Position1 { X }
 //!     enum Position2 { X, Y }
@@ -161,7 +163,7 @@
 //!
 //! ```
 //! #[crabtime::function]
-//! fn gen_positions3(components: Vec<String>) {
+//! fn gen_positions3(components: Vec<String>) -> String {
 //!     let structs = components.iter().enumerate().map(|(ix, name)| {
 //!         let dim = ix + 1;
 //!         let cons = components[0..dim].join(",");
@@ -186,7 +188,7 @@
 //!
 //! ```
 //! #[crabtime::function]
-//! fn gen_positions4(components: Vec<String>) {
+//! fn gen_positions4(components: Vec<String>) -> String {
 //!     components.iter().enumerate().map(|(ix, name)| {
 //!         let dim = ix + 1;
 //!         let cons = components[0..dim].join(",");
@@ -228,7 +230,7 @@
 //!
 //! ```
 //! #[crabtime::function]
-//! fn gen_positions6() {
+//! fn gen_positions6() -> proc_macro2::TokenStream {
 //!     // Inline dependencies used for brevity.
 //!     // You should use [build-dependencies] section in your Cargo.toml instead.
 //!     #![dependency(proc-macro2 = "1")]
@@ -395,14 +397,14 @@
 //! }
 //! ```
 //!
-//! The cache is always written to the path defined as `<cache_path>/<module>/<macro_name>`. The
-//! defaults are presented below:
+//! The cache is always written to
+//! `<project_dir>/target/debug/build/crabtime/<module>/<macro_name>`. The defaults are presented
+//! below:
 //!
 //! |                      | Rust Unstable           | Rust Stable                               |
 //! | :---                 | :---                    | :---                                      |
 //! | Cache enabled        | ✅                      | ❌ by default, ✅ when `module` used.    |
 //! | `module` default     | path to def-site module | __none__                                 |
-//! | `cache_path` default | `<project_dir>/target/.../crabtime/<macro_path>` | `$HOME/.cargo/crabtime` |
 //!
 //! Please note that caching will be automatically enabled on the stable channel as soon as the
 //! [proc_macro_span](proc_macro_span) feature is stabilized. That feature allows Crabtime to read
@@ -745,7 +747,7 @@ macro_rules! eval {
     ($($ts:tt)*) => {
         {
             #[crabtime::eval_fn(cache=false, content_base_name=true)]
-            fn run() {
+            fn run() -> _ {
                 $($ts)*
             }
         }
@@ -766,7 +768,9 @@ mod tests {
     }
 }
 
+
 #[crabtime::function]
+#[macro_export]
 fn my_macro_expansion4() {
     let components = ["X", "Y", "Z", "W"];
     for (ix, name) in components.iter().enumerate() {

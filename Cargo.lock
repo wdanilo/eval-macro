@@ -21,6 +21,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "crabtime-test-nightly"
+version = "1.0.0"
+dependencies = [
+ "crabtime",
+]
+
+[[package]]
+name = "crabtime-test-stable"
+version = "1.0.0"
+dependencies = [
+ "crabtime",
+]
+
+[[package]]
 name = "equivalent"
 version = "1.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"

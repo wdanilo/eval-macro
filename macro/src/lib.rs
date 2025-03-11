@@ -1,5 +1,9 @@
 #![cfg_attr(nightly, feature(proc_macro_span))]
-#![feature(proc_macro_diagnostic)]
+#![cfg_attr(nightly, feature(proc_macro_diagnostic))]
+
+#![cfg_attr(not(nightly), allow(dead_code))]
+#![cfg_attr(not(nightly), allow(unused_macros))]
+#![cfg_attr(not(nightly), allow(unused_imports))]
 
 mod error;
 
@@ -69,6 +73,9 @@ fn gen_prelude(include_token_stream_impl: bool) -> String {
     let error_prefix = Level::ERROR_PREFIX;
     let prelude_tok_stream = if include_token_stream_impl { PRELUDE_FOR_TOKEN_STREAM } else { "" };
     format!("
+        #[allow(unused_macros)]
+        #[allow(unused_imports)]
+        #[allow(clippy)]
         mod {GEN_MOD} {{
             #![allow(clippy::all)]
 
@@ -225,6 +232,7 @@ const PRELUDE_STATIC: &str = "
 
 /// To be removed one day.
 const PRELUDE_MAGIC: &str = "
+    #[allow(clippy)]
     fn sum_combinations(n: usize) -> Vec<Vec<usize>> {
         let mut result = Vec::new();
 
@@ -276,28 +284,38 @@ fn find_parent_dir<'t>(path: &'t Path, dir_name: &str) -> Result<&'t Path> {
 impl Paths {
     #[cfg(nightly)]
     fn new(options: MacroOptions, macro_name: &str, input_str: &str) -> Result<Self> {
+        let name = if options.content_base_name {
+            project_name_from_input(input_str)
+        } else {
+            macro_name.to_string()
+        };
+
         let mut call_site_path = proc_macro::Span::call_site().source_file().path();
         call_site_path.set_extension("");
+
+        let output_dir = Self::get_output_root()?.join(&call_site_path).join(&name);
         let crate_out_str = OUT_DIR;
         let crate_out = Path::new(&crate_out_str);
         let target = find_parent_dir(crate_out, "target")?;
         let workspace = parent_dir(target)?;
         let file_path = workspace.join(&call_site_path);
         let cargo_toml_path = Some(find_cargo_configs(&file_path)?);
-        let build_dir = find_parent_dir(crate_out, "build")?;
-        let name = if options.content_base_name { project_name_from_input(input_str) } else { macro_name.to_string() };
-        let output_dir = build_dir.join(CRATE).join(call_site_path).join(&name);
         Ok(Self { output_dir, cargo_toml_path })
     }
 
     #[cfg(not(nightly))]
     fn new(_options: MacroOptions, _macro_name: &str, input_str: &str) -> Result<Self> {
-        let home_dir = std::env::var("HOME").context("$HOME not set")?;
-        let eval_macro_dir = PathBuf::from(home_dir).join(".cargo").join(CRATE);
-        let project_name = project_name_from_input(input_str);
-        let output_dir = eval_macro_dir.join(&project_name);
+        let name = project_name_from_input(input_str);
+        let output_dir = Self::get_output_root()?.join(CRATE).join(&name);
         let cargo_toml_path = None;
-        Ok(Self { output_dir, cargo_toml_path: None })
+        Ok(Self { output_dir, cargo_toml_path })
+    }
+
+    fn get_output_root() -> Result<PathBuf> {
+        let crate_out_str = OUT_DIR;
+        let crate_out = Path::new(&crate_out_str);
+        let build_dir = find_parent_dir(crate_out, "build")?;
+        Ok(build_dir.join(CRATE))
     }
 
     fn with_output_dir<T>(&self, cache: bool, f: impl FnOnce(&PathBuf) -> Result<T>) -> Result<T> {
@@ -875,7 +893,7 @@ const WRONG_ARGS: &str = "Function should have zero or one argument, one of:
     - `input: TokenStream`
 ";
 
-fn prepare_input_code(attributes:&str, body: &str, include_token_stream_impl: bool) -> String {
+fn prepare_input_code(attributes:&str, body: &str, output_tp: &str, include_token_stream_impl: bool) -> String {
     let body_esc: String = body.chars().flat_map(|c| c.escape_default()).collect();
     let prelude = gen_prelude(include_token_stream_impl);
     format!("
@@ -886,7 +904,7 @@ fn prepare_input_code(attributes:&str, body: &str, include_token_stream_impl: bo
 
         fn main() {{
             let mut __output_buffer__ = String::new();
-            let result = {{
+            let result: {output_tp} = {{
                 {body}
             }};
             __output_buffer__.push_str(&{GEN_MOD}::code_from_output(result));
@@ -977,6 +995,7 @@ fn eval_fn_impl(
     let input_fn_ast = syn::parse::<syn::ItemFn>(item)?;
     let name = &input_fn_ast.sig.ident.to_string();
     let body_ast = &input_fn_ast.block.stmts;
+    let output_tp = &input_fn_ast.sig.output;
     let input_str = expand_output_macro(expand_quote_macro(quote!{ #(#body_ast)* })).to_string();
     let paths = Paths::new(options, name, &input_str)?;
 
@@ -986,7 +1005,11 @@ fn eval_fn_impl(
     }
     let attributes = cfg.extract_inline_attributes(input_fn_ast.attrs)?;
     let include_token_stream_impl = cfg.contains_dependency("proc-macro2");
-    let input_code = prepare_input_code(&attributes, &input_str, include_token_stream_impl);
+    let output_tp_str = match output_tp {
+        syn::ReturnType::Default => "()".to_string(),
+        syn::ReturnType::Type(_, tp) => quote!{#tp}.to_string(),
+    };
+    let input_code = prepare_input_code(&attributes, &input_str, &output_tp_str, include_token_stream_impl);
     debug!("INPUT CODE: {input_code}");
     let mut output_dir_str = String::new();
     let (output, was_cached) = paths.with_output_dir(options.cache, |output_dir| {
@@ -1041,6 +1064,7 @@ fn function_impl(
     let name = &input_fn_ast.sig.ident;
     let args_ast = &input_fn_ast.sig.inputs;
     let body_ast = &input_fn_ast.block.stmts;
+    let output_tp = &input_fn_ast.sig.output;
 
     let (args, args_code) = parse_args(args_ast).context(|| error!(WRONG_ARGS))?;
     let args_pattern = args.pattern();
@@ -1055,8 +1079,7 @@ fn function_impl(
         .map_or_else(|| "unknown".into(), |s| s.to_string_lossy().into_owned());
     let rust_analyzer_hints = if program_name.contains("rust-analyzer") {
         quote! {
-            #[cfg(debug_assertions)]
-            mod trashtime {
+            mod __rust_analyzer_hints__ {
                 #[test]
                 #[ignore]
                 fn mytest() {
@@ -1068,15 +1091,19 @@ fn function_impl(
         quote! {}
     };
 
-    let attrs_vec = input_fn_ast.attrs;
+    let mut attrs_vec = input_fn_ast.attrs;
+    let export_attr_opt = remove_macro_export_attribute(&mut attrs_vec);
+
     let attrs = quote!{ #(#attrs_vec)* };
     #[cfg(not(test))]
     let out = quote! {
         #rust_analyzer_hints
+
+        #export_attr_opt
         macro_rules! #name {
             (@ [$($__input__:tt)*] #args_pattern) => {
                 #[crabtime::eval_fn(#attr)]
-                fn #name() {
+                fn #name() #output_tp {
                     #attrs
                     let __INPUT_STR__: &'static str = stringify!($($__input__)*);
                     #args_setup
@@ -1092,7 +1119,6 @@ fn function_impl(
             };
         }
     };
-    debug!("OUTPUT : {out}");
     Ok(out)
 }
 
@@ -1121,17 +1147,13 @@ fn get_current_time() -> String {
     format!("{hours:02}:{minutes:02}:{seconds:02} ({milliseconds:03})")
 }
 
-// TODO: typed function output
+
+fn remove_macro_export_attribute(attrs: &mut Vec<syn::Attribute>) -> Option<syn::Attribute> {
+    attrs.iter().position(|attr| attr.path().is_ident("macro_export")).map(|pos| attrs.remove(pos))
+}
+
 // TODO: get lints from Cargo
 // TODO: support workspaces, for edition and dependencies or is it done automatically for edition?
-// TODO: macro export
-// TODO:
-//     crabtime::rules! {
-//         test (input: TokenStream) => {
-//             // ...
-//         }
-//     }
 // TODO: removing project can cause another process to fail - after compilation, another process might already acquire lock
-// TODO: Remove warnings from gen code
 
 

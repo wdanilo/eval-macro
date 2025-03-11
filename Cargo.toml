@@ -4,6 +4,7 @@ resolver = "3"
 members = [
     "lib",
     "macro",
+    "tests/*"
 ]
 
 [profile.release]
