@@ -1125,6 +1125,7 @@ fn eval_fn_impl(
         /// Cached: {was_cached}
         /// Output Dir: {output_dir_str}
         /// Macro Options: {options_doc}
+        const _: () = ();
         {output_code}
     ");
 
@@ -1176,6 +1177,25 @@ fn function_impl(
     // } else {
     //     quote! {}
     // };
+    let exe_path = std::env::current_exe()?;
+    // Extract the file name from the path.
+    let program_name = exe_path
+        .file_name()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "unknown".into());
+
+    // Open /tmp/names.txt for appending, create it if it doesn't exist.
+    let file_path = Path::new("/tmp/names.txt");
+    let mut file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(file_path)?;
+
+    // Write the program name followed by a newline.
+    writeln!(file, "{}", program_name)?;
+
+
+
 
     let args_pattern = args.pattern();
     let args_setup = args.setup();
@@ -1184,19 +1204,28 @@ fn function_impl(
     let input_str = expand_expand_macro(quote!{ #(#body_ast)* });
     // panic!("{}", input_str);
 
+    let xxx = if program_name.contains("rust-analyzer") {
+        quote! {
+            #[cfg(debug_assertions)]
+            mod trashtime {
+                #[test]
+                #[ignore]
+                fn mytest() {
+                    #body
+                }
+            }
+        }
+    } else {
+        quote! {}
+    };
+
     let attrs_vec = input_fn_ast.attrs;
     let attrs = quote!{ #(#attrs_vec)* };
+    #[cfg(not(test))]
     let out = quote! {
-        fn trashme() {
-            mod crabtime {
-                macro_rules! output {
-                    ($($tt:tt)*) => {};
-                }
-                pub(super) use output;
-            }
-            #body
-            ()
-        }
+
+
+        #xxx
 
         macro_rules! #name {
             (@ [$($__input__:tt)*] #args_pattern) => {
@@ -1272,3 +1301,5 @@ pub fn trash(
 //         }
 //     }
 // TODO: removing project can cause another process to fail - after compilation, another process might already acquire lock
+
+
