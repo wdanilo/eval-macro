@@ -758,6 +758,8 @@ macro_rules! eval {
 // === Tests ===
 // =============
 
+/// Most of the tests are included in the documentation above. These tests cover corner cases to
+/// ensure that the macro works as expected.
 #[cfg(test)]
 mod tests {
     #[test]
@@ -766,19 +768,36 @@ mod tests {
         fn empty_def_compilation() {}
         empty_def_compilation!();
     }
-}
 
+    mod mod_a {
+        #[crabtime::function]
+        fn inter_module_macro() -> &str {
+            "pub struct Generated;"
+        }
+        pub(super) use inter_module_macro;
+    }
 
-#[crabtime::function]
-#[macro_export]
-fn my_macro_expansion4() {
-    let components = ["X", "Y", "Z", "W"];
-    for (ix, name) in components.iter().enumerate() {
-        let dim = ix + 1;
-        let cons = components[0..dim].join(",");
-        println!("[OUTPUT] enum Position{dim} {{");
-        println!("[OUTPUT]     {cons}");
-        println!("[OUTPUT] }}");
+    mod mod_b {
+        super::mod_a::inter_module_macro!();
+    }
+
+    #[test]
+    fn inter_module_macro() {
+        let _p = mod_b::Generated;
     }
 }
-my_macro_expansion4!();
+
+//
+// #[crabtime::function]
+// #[macro_export]
+// fn my_macro_expansion4() {
+//     let components = ["X", "Y", "Z", "W"];
+//     for (ix, name) in components.iter().enumerate() {
+//         let dim = ix + 1;
+//         let cons = components[0..dim].join(",");
+//         println!("[OUTPUT] enum Position{dim} {{");
+//         println!("[OUTPUT]     {cons}");
+//         println!("[OUTPUT] }}");
+//     }
+// }
+// my_macro_expansion4!();

@@ -765,7 +765,7 @@ impl Args {
         if let Self::TokenStream { ident } = self {
             quote! {
                 use proc_macro2::TokenStream;
-                let #ident: TokenStream = __INPUT_STR__.parse().unwrap();
+                let #ident: TokenStream = stringify!($($#ident)*).parse().unwrap();
             }
         } else {
             Default::default()
@@ -1101,24 +1101,18 @@ fn function_impl(
 
         #export_attr_opt
         macro_rules! #name {
-            (@ [$($__input__:tt)*] #args_pattern) => {
+            (#args_pattern) => {
                 #[crabtime::eval_fn(#attr)]
                 fn #name() #output_tp {
                     #attrs
-                    let __INPUT_STR__: &'static str = stringify!($($__input__)*);
                     #args_setup
                     #args_code
                     #input_str
                 }
             };
-            (@ $($ts:tt)*) => {
-                EXPANSION_ERROR
-            };
-            ($($input:tt)*) => {
-                #name! { @ [$($input)*] $($input)* }
-            };
         }
     };
+    // panic!("OUT: {out}");
     Ok(out)
 }
 
