@@ -6,6 +6,9 @@
 #![cfg_attr(not(nightly), allow(unused_imports))]
 
 mod error;
+mod path;
+
+use error::*;
 
 use std::fmt::Debug;
 use proc_macro2::Delimiter;
@@ -25,7 +28,6 @@ use std::default::Default;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::Hash;
 use std::hash::Hasher;
-use error::*;
 
 // =================
 // === Constants ===
@@ -35,11 +37,22 @@ use error::*;
 const DEBUG: bool = false;
 
 const CRATE: &str = "crabtime";
+/// Module with utils functions in the generated project.
+const GEN_MOD: &str = CRATE;
 const DEFAULT_EDITION: &str = "2024";
 const DEFAULT_RESOLVER: &str = "3";
-const GEN_MOD: &str = CRATE;
 const OUTPUT_PREFIX: &str = "[OUTPUT]";
 const OUT_DIR: &str = env!("OUT_DIR");
+
+/// Rust keywords for special handling. This is not needed for this macro to work, it is only used
+/// to make `IntelliJ` / `RustRover` work correctly, as their `TokenStream` spans are incorrect.
+const KEYWORDS: &[&str] = &[
+    "as", "async", "await", "break", "const", "continue", "crate", "dyn", "else", "enum",
+    "extern", "false", "fn", "for", "if", "impl", "in", "let", "loop", "match", "mod", "move",
+    "mut", "pub", "ref", "return", "self", "Self", "static", "struct", "super", "trait", "true",
+    "type", "unsafe", "use", "where", "while", "abstract", "become", "box", "do", "final", "macro",
+    "override", "priv", "typeof", "unsized", "virtual", "yield", "try",
+];
 
 // ==================
 // === TokenRange ===
@@ -76,6 +89,7 @@ fn gen_prelude(include_token_stream_impl: bool) -> String {
         #[allow(unused_macros)]
         #[allow(unused_imports)]
         #[allow(clippy)]
+        #[allow(warnings)]
         mod {GEN_MOD} {{
             #![allow(clippy::all)]
 
@@ -228,6 +242,20 @@ const PRELUDE_STATIC: &str = "
         ($t:expr) => { stringify!($t) };
     }
     pub(super) use stringify_if_needed;
+
+    // This is defined only to prevent compilation errors. The real expansion is done by the
+    // `function` attribute macro.
+    macro_rules! output {
+        ($($ts:tt)*) => {};
+    }
+    pub(super) use output;
+
+    // This is defined only to prevent compilation errors. The real expansion is done by the
+    // `function` attribute macro.
+    macro_rules! quote {
+        ($($ts:tt)*) => { String::new() };
+    }
+    pub(super) use quote;
 ";
 
 /// To be removed one day.
@@ -263,78 +291,113 @@ const PRELUDE_MAGIC: &str = "
 #[derive(Debug)]
 struct Paths {
     output_dir: PathBuf,
+    // Whether we should remove `output_dir` after usage.
+    one_shot_output_dir: bool,
     /// None if we are on stable.
     cargo_toml_path: Option<CargoConfigPaths>,
-}
-
-fn parent_dir(path: &Path) -> Result<&Path> {
-    path.parent().context(|| error!("Path '{}' does not have a parent.", path.display()))
-}
-
-fn find_parent_dir<'t>(path: &'t Path, dir_name: &str) -> Result<&'t Path> {
-    let dir_name_os = std::ffi::OsStr::new(dir_name);
-    path.ancestors()
-        .find(|p| p.file_name() == Some(dir_name_os))
-        .context(|| error!(
-            "Path '{}' does not have parent '{dir_name}' directory.",
-            path.display()
-        ))
 }
 
 impl Paths {
     #[cfg(nightly)]
     fn new(options: MacroOptions, macro_name: &str, input_str: &str) -> Result<Self> {
         let name = if options.content_base_name {
-            project_name_from_input(input_str)
+            Self::project_name_from_input(input_str)
         } else {
             macro_name.to_string()
         };
-
-        let mut call_site_path = proc_macro::Span::call_site().source_file().path();
-        call_site_path.set_extension("");
-
+        let call_site_path = Self::get_call_site_rel();
         let output_dir = Self::get_output_root()?.join(&call_site_path).join(&name);
         let crate_out_str = OUT_DIR;
         let crate_out = Path::new(&crate_out_str);
-        let target = find_parent_dir(crate_out, "target")?;
-        let workspace = parent_dir(target)?;
+        let target = path::find_parent(crate_out, "target")?;
+        let workspace = path::parent(target)?;
         let file_path = workspace.join(&call_site_path);
         let cargo_toml_path = Some(find_cargo_configs(&file_path)?);
-        Ok(Self { output_dir, cargo_toml_path })
+        let out = Self { output_dir, cargo_toml_path, one_shot_output_dir: false }.init(options);
+        Ok(out)
     }
 
     #[cfg(not(nightly))]
-    fn new(_options: MacroOptions, _macro_name: &str, input_str: &str) -> Result<Self> {
-        let name = project_name_from_input(input_str);
-        let output_dir = Self::get_output_root()?.join(CRATE).join(&name);
+    fn new(options: MacroOptions, _macro_name: &str, input_str: &str) -> Result<Self> {
+        let name = Self::project_name_from_input(input_str);
+        let output_dir = Self::get_output_root()?.join(&name);
         let cargo_toml_path = None;
-        Ok(Self { output_dir, cargo_toml_path })
+        Ok(Self { output_dir, cargo_toml_path, one_shot_output_dir: false }.init(options))
+    }
+
+    fn init(mut self, options: MacroOptions) -> Self {
+        // We cache projects on nightly by default. On stable, the project name is based on the
+        // input code.
+        self.one_shot_output_dir = cfg!(not(nightly)) || !options.cache;
+        // If we are removing projects after usage, it is possible that multiple processes try to
+        // expand the same macro in parallel – e.g. user's watch script and IDE checker. In such a
+        // case, one of the processes might end while another is still running. This can cause
+        // the other process to fail if it still needs project access on disk.
+        if self.one_shot_output_dir {
+            let pid = std::process::id();
+            self.output_dir = self.output_dir.join(format!("pid_{pid}"));
+        }
+        self
+    }
+
+    fn get_call_site_rel() -> PathBuf {
+        // Sometimes `proc_macro::Span::call_site()` returns a relative path, sometimes an absolute
+        // one. In the latter case, we need to discover the relative part from the project root.
+        let mut call_site_path = proc_macro::Span::call_site().source_file().path();
+        call_site_path.set_extension("");
+        if call_site_path.is_relative() {
+            return call_site_path.to_path_buf();
+        }
+
+        // We strip the common prefix of `proc_macro::Span::call_site()` and `OUT_DIR`.
+        let mut common_prefix_len = 0;
+        let mut common_prefix = PathBuf::new();
+        let mut components1 = call_site_path.components();
+        let mut components2 = Path::new(OUT_DIR).components();
+        while let (Some(part1), Some(part2)) = (components1.next(), components2.next()) {
+            if part1 == part2 {
+                common_prefix_len += 1;
+                common_prefix.push(part1);
+            } else {
+                break;
+            }
+        }
+
+        // We don't want to strip small prefix, like `/` or `C:\\`. E.g. when running tests, cargo
+        // generates projects in `var/folders/wm/...`
+        if common_prefix_len <= 3 {
+            return call_site_path.to_path_buf();
+        }
+
+        match call_site_path.strip_prefix(&common_prefix) {
+            Ok(relative_path) => relative_path.to_path_buf(),
+            Err(_) => call_site_path.to_path_buf(), // Should not happen
+        }
+    }
+
+    fn project_name_from_input(input_str: &str) -> String {
+        let mut hasher = DefaultHasher::new();
+        input_str.hash(&mut hasher);
+        format!("project_{:016x}", hasher.finish())
     }
 
     fn get_output_root() -> Result<PathBuf> {
         let crate_out_str = OUT_DIR;
         let crate_out = Path::new(&crate_out_str);
-        let build_dir = find_parent_dir(crate_out, "build")?;
+        let build_dir = path::find_parent(crate_out, "build")?;
         Ok(build_dir.join(CRATE))
     }
 
-    fn with_output_dir<T>(&self, cache: bool, f: impl FnOnce(&PathBuf) -> Result<T>) -> Result<T> {
+    fn with_output_dir<T>(&self, f: impl FnOnce(&PathBuf) -> Result<T>) -> Result<T> {
         if !self.output_dir.exists() {
             fs::create_dir_all(&self.output_dir).context("Failed to create project directory.")?;
         }
         let out = f(&self.output_dir);
-        // We cache projects on nightly. On stable, the project name is based on the input code.
-        if cfg!(not(nightly)) || !cache {
+        if self.one_shot_output_dir {
             fs::remove_dir_all(&self.output_dir).ok();
         }
         out
     }
-}
-
-fn project_name_from_input(input_str: &str) -> String {
-    let mut hasher = DefaultHasher::new();
-    input_str.hash(&mut hasher);
-    format!("project_{:016x}", hasher.finish())
 }
 
 // ========================
@@ -344,30 +407,30 @@ fn project_name_from_input(input_str: &str) -> String {
 #[derive(Debug)]
 struct CargoConfigPaths {
     crate_config: PathBuf,
-    _workspace_config: Option<PathBuf>,
+    workspace_config: Option<PathBuf>,
 }
 
 fn find_cargo_configs(path: &Path) -> Result<CargoConfigPaths> {
     let mut current_path = path.to_path_buf();
-    let mut out = Vec::new();
+    let mut candidates = Vec::new();
     loop {
         let candidate = current_path.join("Cargo.toml");
-        if candidate.is_file() { out.push(candidate) }
+        if candidate.is_file() { candidates.push(candidate) }
         if !current_path.pop() { break }
     }
-    if out.len() >= 2 {
-        Ok(CargoConfigPaths {
-            crate_config: out[0].clone(),
-            _workspace_config: Some(out[1].clone()),
-        })
-    } else if !out.is_empty() {
-        Ok(CargoConfigPaths {
-            crate_config: out[0].clone(),
-            _workspace_config: None,
-        })
-    } else {
-        err!("No 'Cargo.toml' files found in parent directories of '{}'.", path.display())
+    let Some((crate_config, other_candidates)) = candidates.split_first() else {
+        return err!("No 'Cargo.toml' files found in parent directories of '{}'.", path.display())
+    };
+
+    // Cargo uses the top-level workspace only.
+    let mut workspace_config = None;
+    for candidate in other_candidates.iter().rev() {
+        if CargoConfig::is_workspace(candidate)? {
+            workspace_config = Some(candidate.clone());
+        }
     }
+    let crate_config = crate_config.clone();
+    Ok(CargoConfigPaths { crate_config, workspace_config })
 }
 
 // ===================
@@ -386,6 +449,10 @@ impl Dependency {
         Self { label, tokens_str, token_range }
     }
 
+    fn to_config_string(&self) -> String {
+        format!("{} = {}", self.label, self.tokens_str)
+    }
+
     #[cfg(nightly)]
     fn span(&self) -> Span {
         self.token_range.as_ref().map_or(Span::call_site(), |t| t.span())
@@ -397,6 +464,13 @@ struct CargoConfig {
     edition: Option<String>,
     resolver: Option<String>,
     dependencies: Vec<Dependency>,
+    lints: LintsConfig,
+}
+
+#[derive(Debug, Default)]
+struct LintsConfig {
+    clippy: String,
+    rust: String,
 }
 
 impl CargoConfig {
@@ -407,11 +481,13 @@ impl CargoConfig {
     fn print(&self) -> String {
         let edition = self.edition.as_ref().map_or(DEFAULT_EDITION, |t| t.as_str());
         let resolver = self.resolver.as_ref().map_or(DEFAULT_RESOLVER, |t| t.as_str());
+        let lints_rust = &self.lints.rust;
+        let lints_clippy = &self.lints.clippy;
         let dependencies = self.dependencies.iter()
-            .map(|t| format!("{} = {}", t.label.clone(), t.tokens_str.clone())) // FIXME: move to dependency method
+            .map(|t| t.to_config_string())
             .collect::<Vec<_>>()
             .join("\n");
-        format!("
+        let out = format!("
             [workspace]
             [package]
             name     = \"eval_project\"
@@ -421,30 +497,103 @@ impl CargoConfig {
 
             [dependencies]
             {dependencies}
-        ")
+
+            [lints.rust]
+            {lints_rust}
+
+            [lints.clippy]
+            {lints_clippy}
+        ");
+        out
     }
 
-    fn fill_from_cargo_toml(&mut self, cargo_config_paths: &CargoConfigPaths) -> Result {
-        let cargo_toml_content = fs::read_to_string(&cargo_config_paths.crate_config)?;
+    fn is_workspace(path: &Path) -> Result<bool> {
+        let cargo_toml_content = fs::read_to_string(path)?;
         let parsed: toml::Value = toml::from_str(&cargo_toml_content)?;
-        let dependencies = parsed
+        Ok(parsed.get("workspace").is_some())
+    }
+
+    fn is_workspace_table(value: &toml::Value) -> bool {
+        if let toml::Value::Table(table) = value {
+            if let Some(toml::Value::Boolean(true)) = table.get("workspace") {
+                return true;
+            }
+        }
+        false
+    }
+
+    fn get_package_edition(table: &toml::Table) -> Option<&str> {
+        table.get("package")
+            .and_then(toml::Value::as_table)
+            .and_then(|pkg_table| pkg_table.get("edition"))
+            .and_then(toml::Value::as_str)
+    }
+
+    fn get_package_version<'t>(table: &'t toml::Table, name: &str) -> Option<&'t str> {
+        table.get("dependencies")
+            .and_then(toml::Value::as_table)
+            .and_then(|pkg_table| pkg_table.get(name))
+            .and_then(toml::Value::as_str)
+    }
+
+    fn print_lints(lints: &toml::Value) -> String {
+        lints.as_table().map(|t| {
+            t.iter().map(|(k, v)| format!("{k} = {v}")).collect::<Vec<_>>().join("\n")
+        }).unwrap_or_default()
+    }
+
+    fn fill_from_cargo_toml(&mut self, paths: &CargoConfigPaths) -> Result {
+        use toml::Value;
+        let config_str = fs::read_to_string(&paths.crate_config)?;
+        let workspace_str = paths.workspace_config.as_ref().map(fs::read_to_string).transpose()?;
+        let config = toml::from_str::<Value>(&config_str)?;
+        let workspace_config_opt = workspace_str.map(|t| toml::from_str::<Value>(&t)).transpose()?;
+        let workspace_config_table_opt = workspace_config_opt.as_ref()
+            .and_then(|t| t.get("workspace")).and_then(|v| v.as_table());
+        let dependencies = config
             .get("build-dependencies")
             .and_then(|v| v.as_table())
-            .map_or(vec![], |t| t.iter().map(|(k, v)| Dependency::new(k.clone(), format!("{v}"), None)).collect());
-        let edition = parsed
+            .map_or(vec![], |t| t.iter().filter_map(|(k, v)|
+                if !Self::is_workspace_table(v) {
+                    Some(Dependency::new(k.clone(), v.to_string(), None))
+                } else {
+                    workspace_config_table_opt
+                        .and_then(|t| Self::get_package_version(t, k))
+                        .map(|t| Dependency::new(k.clone(), t.to_string(), None))
+                }
+            ).collect());
+        let edition = config
             .get("package")
             .and_then(|v| v.as_table())
             .and_then(|table| table.get("edition"))
-            .and_then(|v| v.as_str())
+            .and_then(|v| if !Self::is_workspace_table(v) { v.as_str() } else {
+                workspace_config_table_opt.and_then(Self::get_package_edition)
+            })
             .unwrap_or("2024");
+        let lints = config.get("lints").map(|v| {
+            let table_opt = if Self::is_workspace_table(v) {
+                workspace_config_table_opt
+            } else {
+                v.as_table()
+            };
+            let ws_lints = table_opt
+                .and_then(|t| t.get("lints"))
+                .and_then(|t| t.as_table());
+            let clippy = ws_lints.and_then(|t| t.get("clippy"))
+                .map(Self::print_lints).unwrap_or_default();
+            let rust = ws_lints.and_then(|t| t.get("rust"))
+                .map(Self::print_lints).unwrap_or_default();
+            LintsConfig {clippy, rust}
+        });
         self.dependencies.extend(dependencies);
         self.edition = Some(edition.to_string());
+        self.lints = lints.unwrap_or_default();
         Ok(())
     }
 
     fn extract_inline_attributes(&mut self, attributes: Vec<syn::Attribute>) -> Result<String> {
         let mut other_attributes = Vec::with_capacity(attributes.len());
-        let mut new_dependencies: Vec<Dependency> = vec![]; // FIXME expl typing not needed
+        let mut new_dependencies = vec![];
         for attr in attributes {
             let tokens = attr.parse_args::<TokenStream>().context("Failed to parse attributes")?;
             let tokens_str = tokens.to_string().replace(" ", "");
@@ -455,7 +604,9 @@ impl CargoConfig {
                 let (key, value) = tokens_str.split_once('=').context(||
                     error!("Incorrect dependency '{tokens_str}'")
                 )?;
-                new_dependencies.push(Dependency::new(key.to_string(), value.to_string(), token_range)); // FIXME
+                let key = key.to_string();
+                let value = value.to_string();
+                new_dependencies.push(Dependency::new(key, value, token_range));
             } else if attr.path().is_ident("edition") {
                 self.edition = Some(tokens_str);
             } else {
@@ -559,7 +710,9 @@ fn expand_expand_macro(input: TokenStream) -> TokenStream {
         match &tokens[i] {
             TokenTree::Group(group) => {
                 let new_stream = expand_expand_macro(group.stream());
-                let new_group = TokenTree::Group(proc_macro2::Group::new(group.delimiter(), new_stream));
+                let new_group = TokenTree::Group(
+                    proc_macro2::Group::new(group.delimiter(), new_stream)
+                );
                 output.extend(std::iter::once(new_group));
             }
             _ => {
@@ -571,7 +724,11 @@ fn expand_expand_macro(input: TokenStream) -> TokenStream {
     output
 }
 
-fn expand_builtin_macro(name: &str, input: TokenStream, f: &impl Fn(TokenStream) -> TokenStream) -> TokenStream {
+fn expand_builtin_macro(
+    name: &str,
+    input: TokenStream,
+    f: &impl Fn(TokenStream) -> TokenStream
+) -> TokenStream {
     let tokens: Vec<TokenTree> = input.into_iter().collect();
     let mut output = TokenStream::new();
     let len = tokens.len();
@@ -663,8 +820,10 @@ fn print_tokens(tokens: &TokenStream) -> String {
     print_tokens_internal(tokens).output
         .replace("{", "{{")
         .replace("}", "}}")
-        .replace("{{{{", "{")
-        .replace("}}}}", "}")
+        .replace("{{%%%{{%%%{{", "{{ {")
+        .replace("}}%%%}}%%%}}", "} }}")
+        .replace("{{%%%{{", "{")
+        .replace("}}%%%}}", "}")
 }
 
 fn print_tokens_internal(tokens: &TokenStream) -> PrintOutput {
@@ -678,15 +837,20 @@ fn print_tokens_internal(tokens: &TokenStream) -> PrintOutput {
         let mut token_start = token.span().start();
         let mut token_end = token.span().end();
         let mut is_brace = false;
+        let mut is_keyword = false;
         let token_str = match token {
             TokenTree::Group(g) => {
                 let content = print_tokens_internal(&g.stream());
                 let mut content_str = content.output;
                 content_str.pop();
                 let (open, close) = match g.delimiter() {
-                    Delimiter::Brace =>{
+                    Delimiter::Brace => {
                         is_brace = true;
-                        ("{", "}")
+                        if content_str.starts_with("{") && content_str.ends_with("}") {
+                            ("{%%%", "%%%}")
+                        } else {
+                            ("{", "}")
+                        }
                     },
                     Delimiter::Parenthesis => ("(", ")"),
                     Delimiter::Bracket => ("[", "]"),
@@ -706,18 +870,22 @@ fn print_tokens_internal(tokens: &TokenStream) -> PrintOutput {
 
                 format!("{open}{content_str}{close}")
             }
-            TokenTree::Ident(ident) => ident.to_string(),
+            TokenTree::Ident(ident) => {
+                let str = ident.to_string();
+                is_keyword = KEYWORDS.contains(&str.as_str());
+                str
+            },
             TokenTree::Literal(lit) => lit.to_string(),
             TokenTree::Punct(punct) => {
-                let str = punct.as_char().to_string();
-                if str == "'" {
+                if punct.spacing() == proc_macro2::Spacing::Joint {
                     add_space = false;
                 }
-                str
+                punct.as_char().to_string()
             },
         };
         debug!("{i}: [{token_start:?}-{token_end:?}] [{prev_token_end:?}]: {token}");
 
+        // check if the punct has set flags to have no spaces
         if is_brace || prev_token_was_brace {
             if let Some(prev_token_end) = prev_token_end {
                 if prev_token_end.line == token_start.line
@@ -729,10 +897,14 @@ fn print_tokens_internal(tokens: &TokenStream) -> PrintOutput {
         }
         prev_token_was_brace = is_brace;
 
+        // Pushing a space before and after keywords is for IntelliJ only.
+        // Their token spans are invalid.
+        if is_keyword { output.push(' '); }
         output.push_str(&token_str);
         if add_space {
             output.push(' ');
         }
+        if is_keyword { output.push(' '); }
 
         first_token_start.get_or_insert(token_start);
         prev_token_end = Some(token_end);
@@ -812,7 +984,7 @@ fn parse_args(
                 }
             }
             pat = quote! {#pat $(,)?};
-            Some((Args::Pattern { str: pat }, code)) // FIXME middle token stream not computed
+            Some((Args::Pattern { str: pat }, code))
         })
 }
 
@@ -849,7 +1021,9 @@ fn parse_inner_type(pfx: &str, ty: &syn::Type) -> Option<(TokenStream, TokenStre
             if let syn::Type::Path(inner_path) = &*ty_ref.elem {
                 if let Some(inner_seg) = inner_path.path.segments.last() {
                     if inner_seg.ident == "str" {
-                        return Some((quote!{#arg:expr}, quote!{crabtime::stringify_if_needed!{#arg}}));
+                        let pat = quote!{#arg:expr};
+                        let code = quote!{crabtime::stringify_if_needed!{#arg}};
+                        return Some((pat, code));
                     }
                 }
             }
@@ -858,7 +1032,9 @@ fn parse_inner_type(pfx: &str, ty: &syn::Type) -> Option<(TokenStream, TokenStre
             if let Some(inner_seg) = inner_type_path.path.segments.last() {
                 let ident_str = inner_seg.ident.to_string();
                 if ident_str == "String" {
-                    return Some((quote!{#arg:expr}, quote!{crabtime::stringify_if_needed!(#arg).to_string()}));
+                    let pat = quote!{#arg:expr};
+                    let code = quote!{crabtime::stringify_if_needed!(#arg).to_string()};
+                    return Some((pat, code));
                 } else if matches!(ident_str.as_str(),
                     "usize" | "u8" | "u16" | "u32" | "u64" | "u128" |
                     "isize" | "i8" | "i16" | "i32" | "i64" | "i128"
@@ -893,7 +1069,12 @@ const WRONG_ARGS: &str = "Function should have zero or one argument, one of:
     - `input: TokenStream`
 ";
 
-fn prepare_input_code(attributes:&str, body: &str, output_tp: &str, include_token_stream_impl: bool) -> String {
+fn prepare_input_code(
+    attributes:&str,
+    body: &str,
+    output_tp: &str,
+    include_token_stream_impl: bool
+) -> String {
     let body_esc: String = body.chars().flat_map(|c| c.escape_default()).collect();
     let prelude = gen_prelude(include_token_stream_impl);
     format!("
@@ -974,17 +1155,17 @@ impl syn::parse::Parse for MacroOptions {
 // =====================
 
 #[proc_macro_attribute]
-pub fn eval_fn(
+pub fn eval_function(
     attr: proc_macro::TokenStream,
     item: proc_macro::TokenStream
 ) -> proc_macro::TokenStream {
     // SAFETY: Used to panic in case of error.
     #[allow(clippy::unwrap_used)]
-    eval_fn_impl(attr, item).unwrap_or_compile_error().into()
+    eval_function_impl(attr, item).unwrap_or_compile_error().into()
 }
 
 
-fn eval_fn_impl(
+fn eval_function_impl(
     attr: proc_macro::TokenStream,
     item: proc_macro::TokenStream
 ) -> Result<TokenStream> {
@@ -1012,7 +1193,7 @@ fn eval_fn_impl(
     let input_code = prepare_input_code(&attributes, &input_str, &output_tp_str, include_token_stream_impl);
     debug!("INPUT CODE: {input_code}");
     let mut output_dir_str = String::new();
-    let (output, was_cached) = paths.with_output_dir(options.cache, |output_dir| {
+    let (output, was_cached) = paths.with_output_dir(|output_dir| {
         debug!("OUTPUT_DIR: {:?}", output_dir);
         output_dir_str = output_dir.to_string_lossy().to_string();
         let was_cached = create_project_skeleton(output_dir, cfg, &input_code)?;
@@ -1102,7 +1283,7 @@ fn function_impl(
         #export_attr_opt
         macro_rules! #name {
             (#args_pattern) => {
-                #[crabtime::eval_fn(#attr)]
+                #[crabtime::eval_function(#attr)]
                 fn #name() #output_tp {
                     #attrs
                     #args_setup
@@ -1112,7 +1293,7 @@ fn function_impl(
             };
         }
     };
-    // panic!("OUT: {out}");
+    debug!("OUT: {out}");
     Ok(out)
 }
 
@@ -1145,9 +1326,3 @@ fn get_current_time() -> String {
 fn remove_macro_export_attribute(attrs: &mut Vec<syn::Attribute>) -> Option<syn::Attribute> {
     attrs.iter().position(|attr| attr.path().is_ident("macro_export")).map(|pos| attrs.remove(pos))
 }
-
-// TODO: get lints from Cargo
-// TODO: support workspaces, for edition and dependencies or is it done automatically for edition?
-// TODO: removing project can cause another process to fail - after compilation, another process might already acquire lock
-
-

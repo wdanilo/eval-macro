@@ -746,13 +746,27 @@ pub use crabtime_internal::*;
 macro_rules! eval {
     ($($ts:tt)*) => {
         {
-            #[crabtime::eval_fn(cache=false, content_base_name=true)]
+            #[crabtime::eval_function(cache=false, content_base_name=true)]
             fn run() -> _ {
                 $($ts)*
             }
         }
     };
 }
+
+// This is defined only to prevent compilation errors. The real expansion is done by the
+// `function` attribute macro.
+#[macro_export]
+macro_rules! output {
+        ($($ts:tt)*) => {};
+    }
+
+// This is defined only to prevent compilation errors. The real expansion is done by the
+// `function` attribute macro.
+#[macro_export]
+macro_rules! quote {
+        ($($ts:tt)*) => { String::new() };
+    }
 
 // =============
 // === Tests ===
@@ -785,19 +799,22 @@ mod tests {
     fn inter_module_macro() {
         let _p = mod_b::Generated;
     }
-}
 
-//
-// #[crabtime::function]
-// #[macro_export]
-// fn my_macro_expansion4() {
-//     let components = ["X", "Y", "Z", "W"];
-//     for (ix, name) in components.iter().enumerate() {
-//         let dim = ix + 1;
-//         let cons = components[0..dim].join(",");
-//         println!("[OUTPUT] enum Position{dim} {{");
-//         println!("[OUTPUT]     {cons}");
-//         println!("[OUTPUT] }}");
-//     }
-// }
-// my_macro_expansion4!();
+    #[test] fn interpolation_before_brace() {
+        #[crabtime::function]
+        fn interpolation_before_brace() {
+            let is_a_branches = "A => true, B => false";
+            crabtime::output! {
+                enum E { A, B }
+                impl E {
+                    fn is_a(&self) -> bool {
+                        match self {
+                            {{is_a_branches}}
+                        }
+                    }
+                }
+            }
+        }
+        interpolation_before_brace!();
+    }
+}
