@@ -1,0 +1,10 @@
+[package]
+name = "crabtime-test-nightly"
+version = "1.0.0"
+edition = "2024"
+
+[dependencies]
+crabtime = { path = "../../lib" }
+
+[lints]
+workspace = true

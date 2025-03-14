@@ -4,20 +4,34 @@ version = 4
 
 [[package]]
 name = "crabtime"
-version = "0.6.0"
+version = "1.0.0"
 dependencies = [
  "crabtime-internal",
 ]
 
 [[package]]
 name = "crabtime-internal"
-version = "0.6.0"
+version = "1.0.0"
 dependencies = [
  "proc-macro2",
  "quote",
  "rustc_version",
  "syn",
  "toml",
+]
+
+[[package]]
+name = "crabtime-test-nightly"
+version = "1.0.0"
+dependencies = [
+ "crabtime",
+]
+
+[[package]]
+name = "crabtime-test-stable"
+version = "1.0.0"
+dependencies = [
+ "crabtime",
 ]
 
 [[package]]
