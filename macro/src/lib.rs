@@ -120,9 +120,8 @@ fn gen_prelude(include_token_stream_impl: bool) -> String {
 
             {PRELUDE_STATIC}
             {prelude_tok_stream}
+            {PRELUDE_ADDONS}
         }}
-
-        {PRELUDE_MAGIC}
     ")
 }
 
@@ -258,10 +257,9 @@ const PRELUDE_STATIC: &str = "
     pub(super) use quote;
 ";
 
-/// To be removed one day.
-const PRELUDE_MAGIC: &str = "
+const PRELUDE_ADDONS: &str = "
     #[allow(clippy)]
-    fn sum_combinations(n: usize) -> Vec<Vec<usize>> {
+    pub fn sum_combinations(n: usize) -> Vec<Vec<usize>> {
         let mut result = Vec::new();
 
         fn generate(n: usize, current: Vec<usize>, result: &mut Vec<Vec<usize>>) {
@@ -1276,7 +1274,6 @@ fn function_impl(
     let export_attr_opt = remove_macro_export_attribute(&mut attrs_vec);
 
     let attrs = quote!{ #(#attrs_vec)* };
-    #[cfg(not(test))]
     let out = quote! {
         #rust_analyzer_hints
 

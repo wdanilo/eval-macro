@@ -138,8 +138,7 @@
 //! ```
 //! #[crabtime::function]
 //! fn gen_positions2(components: Vec<String>) {
-//!     for (ix, name) in components.iter().enumerate() {
-//!         let dim = ix + 1;
+//!     for dim in 1 ..= components.len() {
 //!         let cons = components[0..dim].join(",");
 //!         crabtime::output! {
 //!             enum Position{{dim}} {
@@ -163,8 +162,7 @@
 //! ```
 //! #[crabtime::function]
 //! fn gen_positions3(components: Vec<String>) -> String {
-//!     let structs = components.iter().enumerate().map(|(ix, name)| {
-//!         let dim = ix + 1;
+//!     let structs = (1 ..= components.len()).map(|dim| {
 //!         let cons = components[0..dim].join(",");
 //!         crabtime::quote! {
 //!             enum Position{{dim}} {
@@ -188,8 +186,7 @@
 //! ```
 //! #[crabtime::function]
 //! fn gen_positions4(components: Vec<String>) -> String {
-//!     components.iter().enumerate().map(|(ix, name)| {
-//!         let dim = ix + 1;
+//!     (1 ..= components.len()).map(|dim| {
 //!         let cons = components[0..dim].join(",");
 //!         format!("enum Position{dim} {{ {cons} }}")
 //!     }).collect::<Vec<_>>().join("\n")
@@ -208,8 +205,7 @@
 //! ```
 //! #[crabtime::function]
 //! fn gen_positions5(components: Vec<String>) {
-//!     for (ix, name) in components.iter().enumerate() {
-//!         let dim = ix + 1;
+//!     for dim in 1 ..= components.len() {
 //!         let cons = components[0..dim].join(",");
 //!         crabtime::output_str!("enum Position{dim} {{ {cons} }}")
 //!     }
@@ -239,8 +235,7 @@
 //!     use quote::quote;
 //!
 //!     let components = ["X", "Y", "Z", "W"];
-//!     let defs = components.iter().enumerate().map(|(ix, name)| {
-//!         let dim = ix + 1;
+//!     let defs = (1 ..= components.len()).map(|dim| {
 //!         let cons = components[0..dim].iter().map(|t|
 //!             syn::Ident::new(t, Span::call_site())
 //!         );
@@ -280,8 +275,7 @@
 //! ```
 //! #[crabtime::function]
 //! fn gen_positions7(name: String, components: Vec<String>) {
-//!     for (ix, name) in components.iter().enumerate() {
-//!         let dim = ix + 1;
+//!     for dim in 1 ..= components.len() {
 //!         let cons = components[0..dim].join(",");
 //!         crabtime::output! {
 //!             enum {{name}}{{dim}} {
@@ -315,8 +309,7 @@
 //! #[crabtime::function]
 //! fn gen_positions8(pattern!($name:ident, $components:tt): _) {
 //!     let components = expand!($components);
-//!     for (ix, name) in components.iter().enumerate() {
-//!         let dim = ix + 1;
+//!     for dim in 1 ..= components.len() {
 //!         let cons = components[0..dim].join(",");
 //!         // We don't need to use `expand!` here.
 //!         let name = stringify!($name);
@@ -344,8 +337,7 @@
 //!     #![dependency(proc-macro2 = "1")]
 //!     let components = ["X", "Y", "Z", "W"];
 //!     let name_str = name.to_string();
-//!     for (ix, name) in components.iter().enumerate() {
-//!         let dim = ix + 1;
+//!     for dim in 1 ..= components.len() {
 //!         let cons = components[0..dim].join(",");
 //!         crabtime::output! {
 //!             enum {{name_str}}{{dim}} {
@@ -615,8 +607,7 @@
 //! ```
 //! #[crabtime::function]
 //! fn my_macro_expansion1(components: Vec<String>) {
-//!     for (ix, name) in components.iter().enumerate() {
-//!         let dim = ix + 1;
+//!     for dim in 1 ..= components.len() {
 //!         let cons = components[0..dim].join(",");
 //!         crabtime::output! {
 //!             enum Position{{dim}} {
@@ -637,8 +628,7 @@
 //!     let components: Vec<String> = expand!(
 //!         [$(crabtime::stringify_if_needed!($components_arg).to_string()),*]
 //!     ).into_iter().collect();
-//!     for (ix, name) in components.iter().enumerate() {
-//!         let dim = ix + 1;
+//!     for dim in 1 ..= components.len() {
 //!         let cons = components[0..dim].join(",");
 //!         crabtime::output_str! {"
 //!             enum Position{dim} {{
@@ -657,8 +647,7 @@
 //! #[crabtime::function]
 //! fn my_macro_expansion3() {
 //!     let components = ["X", "Y", "Z", "W"];
-//!     for (ix, name) in components.iter().enumerate() {
-//!         let dim = ix + 1;
+//!     for dim in 1 ..= components.len() {
 //!         let cons = components[0..dim].join(",");
 //!         __output_buffer__.push_str(
 //!             &format!("enum Position{dim} {{ {cons} }}\n")
@@ -675,8 +664,7 @@
 //! #[crabtime::function]
 //! fn my_macro_expansion4() {
 //!     let components = ["X", "Y", "Z", "W"];
-//!     for (ix, name) in components.iter().enumerate() {
-//!         let dim = ix + 1;
+//!     for dim in 1 ..= components.len() {
 //!         let cons = components[0..dim].join(",");
 //!         println!("[OUTPUT] enum Position{dim} {{");
 //!         println!("[OUTPUT]     {cons}");
@@ -753,19 +741,44 @@ macro_rules! eval {
     };
 }
 
-// This is defined only to prevent compilation errors. The real expansion is done by the
-// `function` attribute macro.
+// ==========================
+// === Type Hints Mockups ===
+// ==========================
+
+// The following items are defined to prevent IDE error messages. The real definition is placed
+// in the generated project per macro usage.
+
 #[macro_export]
 macro_rules! output {
-        ($($ts:tt)*) => {};
-    }
+    ($($ts:tt)*) => {};
+}
 
-// This is defined only to prevent compilation errors. The real expansion is done by the
-// `function` attribute macro.
 #[macro_export]
 macro_rules! quote {
-        ($($ts:tt)*) => { String::new() };
-    }
+    ($($ts:tt)*) => { String::new() };
+}
+
+#[macro_export]
+macro_rules! write_ln {
+    ($($ts:tt)*) => {};
+}
+
+/// Returns all ordered combinations of positive integers that sum to `n` (with at least two
+/// summands). For example `sum_combinations(4)` returns
+///
+/// ```text
+/// [1, 1, 1, 1]
+/// [1, 1, 2]
+/// [1, 2, 1]
+/// [2, 1, 1]
+/// [1, 3]
+/// [3, 1]
+/// [2, 2]
+/// ```
+#[allow(clippy::panic)]
+pub fn sum_combinations(_n: usize) -> Vec<Vec<usize>> {
+    panic!()
+}
 
 // =============
 // === Tests ===
@@ -787,6 +800,7 @@ mod tests {
         fn inter_module_macro() -> &str {
             "pub struct Generated;"
         }
+        #[allow(clippy::single_component_path_imports)]
         pub(super) use inter_module_macro;
     }
 
