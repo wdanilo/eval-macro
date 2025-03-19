@@ -5,7 +5,7 @@ authors = ["Wojciech Danilo <wojciech.danilo@gmail.com>"]
 description = "A powerful yet easy-to-use Rust macro that generates code by evaluating inline Rust logic at compile time."
 keywords = ["macro", "macro_rules", "procedural", "eval", "inline"]
 license = "MIT OR Apache-2.0"
-repository = "https://github.com/wdanilo/eval-macro"
+repository = "https://github.com/wdanilo/crabtime"
 edition = { workspace = true }
 
 [lib]
