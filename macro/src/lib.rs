@@ -338,6 +338,7 @@ impl Paths {
         self
     }
 
+    #[cfg(nightly)]
     fn get_call_site_rel() -> PathBuf {
         // Sometimes `proc_macro::Span::call_site()` returns a relative path, sometimes an absolute
         // one. In the latter case, we need to discover the relative part from the project root.
