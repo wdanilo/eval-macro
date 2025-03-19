@@ -9,7 +9,7 @@ We would like to extend our heartfelt gratitude to the following individuals for
 
 1. [timonv](https://github.com/timonv) – For discovering and suggesting the brilliant name for this 
    crate. Read more about it [here](https://www.reddit.com/r/rust/comments/1j42fgi/comment/mg6pwfe).
-2. [Polanas](https://arc.net/l/quote/rsedgcvi) – For their invaluable assistance with testing, 
+2. [Polanas](https://github.com/Polanas) – For their invaluable assistance with testing, 
    design, and insightful feedback that greatly improved the project.
 
 Your support and contributions have played a vital role in making this crate better—thank you! 
