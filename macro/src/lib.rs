@@ -81,21 +81,39 @@ impl TokenRange {
 // === Generated Code Prelude ===
 // ==============================
 
-fn gen_prelude(include_token_stream_impl: bool) -> String {
+fn gen_prelude(include_token_stream_impl: bool, paths: &Paths) -> String {
     let warning_prefix = Level::WARNING_PREFIX;
     let error_prefix = Level::ERROR_PREFIX;
     let prelude_tok_stream = if include_token_stream_impl { PRELUDE_FOR_TOKEN_STREAM } else { "" };
+
+    let workspace_path =
+        format!("pub const WORKSPACE_PATH: &str = \"{}\";", paths.workspace.display());
+    #[cfg(nightly)]
+
+    let crate_config_path =
+        format!("pub const CRATE_CONFIG_PATH: &str = \"{}\";", paths.crate_config.display());
+    #[cfg(not(nightly))]
+    let crate_config_path = "";
+
+    #[cfg(nightly)]
+    let call_site_file_path =
+        format!("pub const CALL_SITE_FILE_PATH: &str = \"{}\";", paths.call_site_file.display());
+    #[cfg(not(nightly))]
+    let call_site_file_path = "";
+
     format!("
         #[allow(unused_macros)]
         #[allow(unused_imports)]
-        #[allow(clippy)]
+        #[allow(clippy::all)]
         #[allow(warnings)]
         mod {GEN_MOD} {{
-            #![allow(clippy::all)]
+            {workspace_path}
+            {crate_config_path}
+            {call_site_file_path}
 
-            const OUTPUT_PREFIX: &'static str = \"{OUTPUT_PREFIX}\";
-            const WARNING_PREFIX: &'static str = \"{warning_prefix}\";
-            const ERROR_PREFIX: &'static str = \"{error_prefix}\";
+            pub const OUTPUT_PREFIX: &str = \"{OUTPUT_PREFIX}\";
+            pub const WARNING_PREFIX: &str = \"{warning_prefix}\";
+            pub const ERROR_PREFIX: &str = \"{error_prefix}\";
 
             macro_rules! output_str {{
                 ($($ts:tt)*) => {{
@@ -288,7 +306,12 @@ const PRELUDE_ADDONS: &str = "
 
 #[derive(Debug)]
 struct Paths {
+    workspace: PathBuf,
     output_dir: PathBuf,
+    #[cfg(nightly)]
+    call_site_file: PathBuf,
+    #[cfg(nightly)]
+    crate_config: PathBuf,
     // Whether we should remove `output_dir` after usage.
     one_shot_output_dir: bool,
     /// None if we are on stable.
@@ -305,13 +328,21 @@ impl Paths {
         };
         let call_site_path = Self::get_call_site_rel();
         let output_dir = Self::get_output_root()?.join(&call_site_path).join(&name);
-        let crate_out_str = OUT_DIR;
-        let crate_out = Path::new(&crate_out_str);
-        let target = path::find_parent(crate_out, "target")?;
-        let workspace = path::parent(target)?;
-        let file_path = workspace.join(&call_site_path);
-        let cargo_toml_path = Some(find_cargo_configs(&file_path)?);
-        let out = Self { output_dir, cargo_toml_path, one_shot_output_dir: false }.init(options);
+        let target = path::find_parent(&output_dir, "target")?;
+        let workspace = path::parent(target)?.to_path_buf();
+        let call_site_file = workspace.join(&call_site_path);
+        let cargo_toml_path = find_cargo_configs(&call_site_file)?;
+        let crate_config = cargo_toml_path.crate_config.clone();
+        let cargo_toml_path = Some(cargo_toml_path);
+        let one_shot_output_dir = false;
+        let out = Self {
+            workspace,
+            output_dir,
+            crate_config,
+            call_site_file,
+            cargo_toml_path,
+            one_shot_output_dir
+        }.init(options);
         Ok(out)
     }
 
@@ -319,8 +350,11 @@ impl Paths {
     fn new(options: MacroOptions, _macro_name: &str, input_str: &str) -> Result<Self> {
         let name = Self::project_name_from_input(input_str);
         let output_dir = Self::get_output_root()?.join(&name);
+        let target = path::find_parent(&output_dir, "target")?;
+        let workspace = path::parent(target)?.to_path_buf();
         let cargo_toml_path = None;
-        Ok(Self { output_dir, cargo_toml_path, one_shot_output_dir: false }.init(options))
+        let one_shot_output_dir = false;
+        Ok(Self { workspace, output_dir, cargo_toml_path, one_shot_output_dir }.init(options))
     }
 
     fn init(mut self, options: MacroOptions) -> Self {
@@ -1072,10 +1106,11 @@ fn prepare_input_code(
     attributes:&str,
     body: &str,
     output_tp: &str,
-    include_token_stream_impl: bool
+    include_token_stream_impl: bool,
+    paths: &Paths
 ) -> String {
     let body_esc: String = body.chars().flat_map(|c| c.escape_default()).collect();
-    let prelude = gen_prelude(include_token_stream_impl);
+    let prelude = gen_prelude(include_token_stream_impl, paths);
     format!("
         {attributes}
         {prelude}
@@ -1189,7 +1224,13 @@ fn eval_function_impl(
         syn::ReturnType::Default => "()".to_string(),
         syn::ReturnType::Type(_, tp) => quote!{#tp}.to_string(),
     };
-    let input_code = prepare_input_code(&attributes, &input_str, &output_tp_str, include_token_stream_impl);
+    let input_code = prepare_input_code(
+        &attributes,
+        &input_str,
+        &output_tp_str,
+        include_token_stream_impl,
+        &paths
+    );
     debug!("INPUT CODE: {input_code}");
     let mut output_dir_str = String::new();
     let (output, was_cached) = paths.with_output_dir(|output_dir| {

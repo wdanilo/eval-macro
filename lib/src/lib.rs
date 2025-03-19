@@ -572,6 +572,32 @@
 //! <br/>
 //! <br/>
 //!
+//! # 🗺️ Paths
+//!
+//! Crabtime macros provide access to several path variables, allowing you to traverse your
+//! project's folder structure during macro evaluation. All paths are accessible within the
+//! `crabtime::` namespace.
+//!
+//!
+//! | Path                  | Availability     | Description |
+//! | :---                  | :---             | :---        |
+//! | `WORKSPACE_PATH`      | Stable & Nightly | Path to the root of your project. This is where the top-most `Cargo.toml` resides, whether it's a single-crate project or a Cargo workspace. |
+//! | `CRATE_CONFIG_PATH`   | Nightly only     | Path to the `Cargo.toml` file of the current crate. |
+//! | `CALL_SITE_FILE_PATH` | Nightly only     | Path to the file where the macro was invoked. |
+//!
+//!
+//! ```
+//! #[crabtime::function]
+//! fn check_paths() {
+//!     println!("Workspace path: {}", crabtime::WORKSPACE_PATH);
+//! }
+//! check_paths!();
+//! # fn main() {}
+//! ```
+//!
+//! <br/>
+//! <br/>
+//!
 //! # 📖 How It Works Under The Hood
 //!
 //! The content of a function annotated with `crabtime::function` is pasted into the `main`
@@ -745,25 +771,29 @@ macro_rules! eval {
 // ==========================
 // === Type Hints Mockups ===
 // ==========================
-
 // The following items are defined to prevent IDE error messages. The real definition is placed
 // in the generated project per macro usage.
 
+/// AVAILABLE ONLY WITHIN THE CRABTIME MACRO.
 #[macro_export]
 macro_rules! output {
     ($($ts:tt)*) => {};
 }
 
+/// AVAILABLE ONLY WITHIN THE CRABTIME MACRO.
 #[macro_export]
 macro_rules! quote {
     ($($ts:tt)*) => { String::new() };
 }
 
+/// AVAILABLE ONLY WITHIN THE CRABTIME MACRO.
 #[macro_export]
 macro_rules! write_ln {
     ($($ts:tt)*) => {};
 }
 
+/// AVAILABLE ONLY WITHIN THE CRABTIME MACRO.
+///
 /// Returns all ordered combinations of positive integers that sum to `n` (with at least two
 /// summands). For example `sum_combinations(4)` returns
 ///
@@ -778,8 +808,12 @@ macro_rules! write_ln {
 /// ```
 #[allow(clippy::panic)]
 pub fn sum_combinations(_n: usize) -> Vec<Vec<usize>> {
-    panic!()
+    panic!("AVAILABLE ONLY WITHIN THE CRABTIME MACRO.")
 }
+
+pub const WORKSPACE_PATH: &str = "AVAILABLE ONLY WITHIN THE CRABTIME MACRO.";
+pub const CRATE_CONFIG_PATH: &str = "AVAILABLE ONLY WITHIN THE CRABTIME MACRO.";
+pub const CALL_SITE_FILE_PATH: &str = "AVAILABLE ONLY WITHIN THE CRABTIME MACRO.";
 
 // =============
 // === Tests ===

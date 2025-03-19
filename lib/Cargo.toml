@@ -1,6 +1,6 @@
 [package]
 name = "crabtime"
-version = "1.0.0"
+version = "1.1.0"
 authors = ["Wojciech Danilo <wojciech.danilo@gmail.com>"]
 description = "A powerful yet easy-to-use Rust macro that generates code by evaluating inline Rust logic at compile time."
 keywords = ["macro", "macro_rules", "procedural", "eval", "inline"]
@@ -15,7 +15,7 @@ std = []
 [lib]
 
 [dependencies]
-crabtime-internal = { version = "1.0.0", path = "../macro" }
+crabtime-internal = { version = "1.1.0", path = "../macro" }
 
 [lints]
 workspace = true
