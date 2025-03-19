@@ -721,6 +721,7 @@
 //!
 //! [inline_dependency_injection]: ...
 //! [space_aware_interpolation]: ...
+#![cfg_attr(not(feature = "std"), no_std)]
 
 extern crate self as crabtime;
 pub use crabtime_internal::*;
@@ -786,7 +787,7 @@ pub fn sum_combinations(_n: usize) -> Vec<Vec<usize>> {
 
 /// Most of the tests are included in the documentation above. These tests cover corner cases to
 /// ensure that the macro works as expected.
-#[cfg(test)]
+#[cfg(all(test, feature = "std"))]
 mod tests {
     #[test]
     fn empty_def_compilation() {
