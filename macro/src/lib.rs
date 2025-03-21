@@ -87,17 +87,17 @@ fn gen_prelude(include_token_stream_impl: bool, paths: &Paths) -> String {
     let prelude_tok_stream = if include_token_stream_impl { PRELUDE_FOR_TOKEN_STREAM } else { "" };
 
     let workspace_path =
-        format!("pub const WORKSPACE_PATH: &str = \"{}\";", paths.workspace.display());
+        format!("pub const WORKSPACE_PATH: &str = r#\"{}\"#;", paths.workspace.display());
     #[cfg(nightly)]
 
     let crate_config_path =
-        format!("pub const CRATE_CONFIG_PATH: &str = \"{}\";", paths.crate_config.display());
+        format!("pub const CRATE_CONFIG_PATH: &str = r#\"{}\"#;", paths.crate_config.display());
     #[cfg(not(nightly))]
     let crate_config_path = "";
 
     #[cfg(nightly)]
     let call_site_file_path =
-        format!("pub const CALL_SITE_FILE_PATH: &str = \"{}\";", paths.call_site_file.display());
+        format!("pub const CALL_SITE_FILE_PATH: &str = r#\"{}\"#;", paths.call_site_file.display());
     #[cfg(not(nightly))]
     let call_site_file_path = "";
 
