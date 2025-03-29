@@ -562,11 +562,11 @@ impl CargoConfig {
             .and_then(toml::Value::as_str)
     }
 
-    fn get_package_version<'t>(table: &'t toml::Table, name: &str) -> Option<&'t str> {
+    fn get_package_version<'t>(table: &'t toml::Table, name: &str) -> Option<&'t toml::Value> {
         table.get("dependencies")
             .and_then(toml::Value::as_table)
             .and_then(|pkg_table| pkg_table.get(name))
-            .and_then(toml::Value::as_str)
+            .filter(|v| v.is_str())
     }
 
     fn print_lints(lints: &toml::Value) -> String {
