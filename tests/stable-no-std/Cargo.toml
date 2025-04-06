@@ -1,0 +1,10 @@
+[package]
+name = "crabtime-test-stable-no-std"
+version = "1.0.0"
+edition = "2024"
+
+[dependencies]
+crabtime = { path = "../../lib", default-features = false }
+
+[lints]
+workspace = true

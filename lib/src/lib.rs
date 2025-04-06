@@ -806,6 +806,7 @@ macro_rules! write_ln {
 /// [3, 1]
 /// [2, 2]
 /// ```
+#[cfg(feature = "std")]
 #[allow(clippy::panic)]
 pub fn sum_combinations(_n: usize) -> Vec<Vec<usize>> {
     panic!("AVAILABLE ONLY WITHIN THE CRABTIME MACRO.")
