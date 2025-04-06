@@ -107,6 +107,30 @@
 //! ```
 //!
 //! <br/>
+//!
+//! <div class="warning">
+//! Due to limitations of `macro_rules!` (which `Crabtime` uses under the hood), you must wrap the
+//! macro call in extra braces when using it in an expression context. For example, if you want to
+//! assign the macro’s output to a variable, do this:
+//!
+//! ```
+//! #[crabtime::function]
+//! fn gen_expr() {
+//!     let output_num = 3;
+//!     crabtime::output! {
+//!         {{output_num}}
+//!     }
+//! }
+//!
+//! fn test() {
+//!     // `let x = gen_expr!{};` would not work here!
+//!     let x = { gen_expr!{} };
+//! }
+//! ```
+//!
+//! </div>
+//!
+//! <br/>
 //! <br/>
 //!
 //! # 🤩 Attribute and derive macros
