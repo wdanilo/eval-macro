@@ -109,9 +109,27 @@
 //! <br/>
 //!
 //! <div class="warning">
-//! Due to limitations of `macro_rules!` (which `Crabtime` uses under the hood), you must wrap the
-//! macro call in extra braces when using it in an expression context. For example, if you want to
-//! assign the macro’s output to a variable, do this:
+//! Due to limitations of `macro_rules!` (which `Crabtime` uses under the hood), you must either
+//! wrap the  macro call in extra braces when using it in an expression context, or use
+//! `crabtime::expression` instead of `crabtime::function`, which does this step for you. For
+//! example, if you want to assign the macro’s output to a variable, do this:
+//!
+//! ```
+//! #[crabtime::expression]
+//! fn gen_expr() {
+//!     let output_num = 3;
+//!     crabtime::output! {
+//!         {{output_num}}
+//!     }
+//! }
+//!
+//! fn test() {
+//!     let x = { gen_expr!() };
+//! }
+//! ```
+//!
+//! Alternatively, you can wrap the macro call in extra braces by yourself if you want to use the
+//! macro both in expression and statement contexts:
 //!
 //! ```
 //! #[crabtime::function]

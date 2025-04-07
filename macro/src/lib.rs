@@ -1273,12 +1273,33 @@ pub fn function(
 ) -> proc_macro::TokenStream {
     // SAFETY: Used to panic in case of error.
     #[allow(clippy::unwrap_used)]
-    function_impl(attr, item).unwrap_or_compile_error().into()
+    function_impl(attr, item, false).unwrap_or_compile_error().into()
+}
+
+#[proc_macro_attribute]
+pub fn statement(
+    attr: proc_macro::TokenStream,
+    item: proc_macro::TokenStream
+) -> proc_macro::TokenStream {
+    // SAFETY: Used to panic in case of error.
+    #[allow(clippy::unwrap_used)]
+    function_impl(attr, item, false).unwrap_or_compile_error().into()
+}
+
+#[proc_macro_attribute]
+pub fn expression(
+    attr: proc_macro::TokenStream,
+    item: proc_macro::TokenStream
+) -> proc_macro::TokenStream {
+    // SAFETY: Used to panic in case of error.
+    #[allow(clippy::unwrap_used)]
+    function_impl(attr, item, true).unwrap_or_compile_error().into()
 }
 
 fn function_impl(
     attr_in: proc_macro::TokenStream,
-    item: proc_macro::TokenStream
+    item: proc_macro::TokenStream,
+    extra_braces: bool,
 ) -> Result<TokenStream> {
     let attr: TokenStream = attr_in.into();
     let input_fn_ast = syn::parse::<syn::ItemFn>(item)?;
@@ -1316,20 +1337,28 @@ fn function_impl(
     let export_attr_opt = remove_macro_export_attribute(&mut attrs_vec);
 
     let attrs = quote!{ #(#attrs_vec)* };
-    let out = quote! {
+    let mut out = quote! {
+        {
+            #[crabtime::eval_function(#attr)]
+            fn #name() #output_tp {
+                #attrs
+                #args_setup
+                #args_code
+                #input_str
+            }
+        }
+    };
+    if extra_braces {
+        out = quote! {
+            { #out }
+        };
+    }
+    out = quote! {
         #rust_analyzer_hints
 
         #export_attr_opt
         macro_rules! #name {
-            (#args_pattern) => {
-                #[crabtime::eval_function(#attr)]
-                fn #name() #output_tp {
-                    #attrs
-                    #args_setup
-                    #args_code
-                    #input_str
-                }
-            };
+            (#args_pattern) => #out;
         }
     };
     debug!("OUT: {out}");
