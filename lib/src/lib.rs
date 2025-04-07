@@ -195,6 +195,35 @@
 //!
 //! <br/>
 //!
+//! <div class="warning">
+//!
+//! ⚠️ **Note:** Interpolated variables are inserted *as-is*, without additional quotes or escape
+//! characters.
+//!
+//! This means that if you want to insert a string literal, you must manually wrap or escape it.
+//! For example, the following code computes a `full_url` that includes quotes, because it is being
+//! inserted as a string literal into the `println!` macro within the generated code:
+//!
+//! ```rust
+//! #[crabtime::function]
+//! fn gen_urls(components: Vec<String>) {
+//!     for (idx, path) in components.iter().enumerate() {
+//!         let full_url = format!("\"{}\"", ["http://localhost:3000", path].join("/"));
+//!         crabtime::output! {
+//!             println!("{}", {{full_url}});
+//!         }
+//!     }
+//! }
+//!
+//! fn main() {
+//!     gen_urls!(["home", "about", "contact"]);
+//! }
+//! ```
+//!
+//! </div>
+//!
+//! <br/>
+//!
 //! <h5><b>Generating output by using <code>crabtime::quote!</code></b></h5>
 //!
 //! The `crabtime::quote!` macro is just like `crabtime::output!`, but instead of outputting the
@@ -294,30 +323,6 @@
 //! }
 //! gen_positions6!();
 //! # fn main() {}
-//! ```
-//!
-//! <br/>
-//!
-//! <h5><b>String interpolation using <code>format!<code></b></h5>
-//!
-//! To use template tags for outputting a String, you need to escape quotation marks (`"`).
-//!
-//! Below is an example for how to print URLs dynamically using the `format!` macro:
-//!
-//! ```rust
-//! #[crabtime::function]
-//! fn gen_urls(components: Vec<String>) {
-//!     for (idx, path) in components.iter().enumerate() {
-//!         let full_url = format!("\"{}\"", ["http://localhost:3000", path].join("/"));
-//!         crabtime::output! {
-//!             println!("{}", {{full_url}});
-//!         }
-//!     }
-//! }
-//!
-//! fn main() {
-//!     gen_urls!(["home", "about", "contact"]);
-//! }
 //! ```
 //!
 //! <br/>

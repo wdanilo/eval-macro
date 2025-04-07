@@ -88,8 +88,8 @@ fn gen_prelude(include_token_stream_impl: bool, paths: &Paths) -> String {
 
     let workspace_path =
         format!("pub const WORKSPACE_PATH: &str = r#\"{}\"#;", paths.workspace.display());
-    #[cfg(nightly)]
 
+    #[cfg(nightly)]
     let crate_config_path =
         format!("pub const CRATE_CONFIG_PATH: &str = r#\"{}\"#;", paths.crate_config.display());
     #[cfg(not(nightly))]
