@@ -6,9 +6,9 @@
 //! <br/>
 //!
 //! **Crabtime** offers a novel way to write Rust macros, inspired by
-//! [Zig's comptime](zigs_comptime). It provides even more flexibility and power than procedural
+//! [Zig's comptime][zigs_comptime]. It provides even more flexibility and power than procedural
 //! macros, while remaining easier and more natural to read and write than
-//! [`macro_rules!`](macro_rules).
+//! [`macro_rules!`][macro_rules].
 //!
 //! <br/>
 //! <br/>
@@ -33,7 +33,7 @@
 //! | <div style="width:300px"/>                            | Crabtime | Proc Macro | `macro_rules!` |
 //! | :---                                                  | :---     | :---       | :---           |
 //! | Advanced transformations                              | ✅       | ✅         | ❌             |
-//! | [Space-aware interpolation](space_aware_interpolation)| ✅       | ❌         | ❌             |
+//! | [Space-aware interpolation](#-output)                 | ✅       | ❌         | ❌             |
 //! | Can define [fn-like macros][fn_like_macros]           | ✅       | ✅         | ✅             |
 //! | Can define [derive macros][derive_macros]             | 🚧       | ✅         | ❌             |
 //! | Can define [attribute macros][attribute_macros]       | 🚧       | ✅         | ❌             |
@@ -336,7 +336,7 @@
 //! <h5><b>Input by using patterns</b></h5>
 //!
 //! In case you want even more control, you can use the same patterns as
-//! [`macro_rules!`](macro_rules) by using a special `pattern!` macro, and you can expand any pattern
+//! [`macro_rules!`][macro_rules] by using a special `pattern!` macro, and you can expand any pattern
 //! using the `expand!` macro:
 //!
 //! <div style="background-color:#397be440; padding: 8px; border-radius: 8px; margin-bottom: 8px;">
@@ -402,7 +402,7 @@
 //! Rust channel, Crabtime and procedural macros have the same performance. On the stable channel,
 //! Crabtime requires slightly more time than a procedural macro after you change your macro
 //! definition. In other words, Crabtime’s performance is similar to procedural macros. It has
-//! higher compilation overhead than [`macro_rules!`](macro_rules) but processes tokens and complex
+//! higher compilation overhead than [`macro_rules!`][macro_rules] but processes tokens and complex
 //! transformations faster.
 //!
 //! |                                            | <div style="width:200px">Proc Macro</div> | <div style="width:200px">Crabtime</div>               | <div style="width:200px"><code>macro_rules!</code></div> |
@@ -440,7 +440,7 @@
 //! | `module` default     | path to def-site module | __none__                                 |
 //!
 //! Please note that caching will be automatically enabled on the stable channel as soon as the
-//! [proc_macro_span](proc_macro_span) feature is stabilized. That feature allows Crabtime to read
+//! [proc_macro_span][proc_macro_span] feature is stabilized. That feature allows Crabtime to read
 //! the path of the file where the macro was used, so it can build a unique cache key.
 //!
 //! <br/>
@@ -571,7 +571,7 @@
 //!
 //! Every Crabtime macro is a separate Cargo project with its own configuration and dependencies.
 //! If you use nightly, Crabtime automatically uses your Cargo.toml configuration. On stable, due
-//! to lack of [proc_macro_span](proc_macro_span) stabilization, Crabtime cannot discover your
+//! to lack of [proc_macro_span][proc_macro_span] stabilization, Crabtime cannot discover your
 //! Cargo.toml automatically. You must provide cargo configuration in your macro blocks, for
 //! example:
 //!
