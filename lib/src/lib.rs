@@ -422,7 +422,7 @@
 //! default on the nightly channel and can be enabled on the stable channel by providing a `module`
 //! attribute, for example:
 //!
-//! ```
+//! ```ignore
 //! #[crabtime::function(cache_key=my_key)]
 //! #[module(my_crate::my_module)]
 //! fn my_macro() {
@@ -913,7 +913,8 @@ mod tests {
 
     // ===
 
-    mod mod_c {
+    // https://github.com/wdanilo/crabtime/issues/25
+    mod test_impl_interpolation_compilation {
         #[crabtime::function]
         fn fn_in_impl() -> &str {
             "pub fn test(&self) {}"

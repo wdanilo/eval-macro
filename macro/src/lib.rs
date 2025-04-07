@@ -1297,6 +1297,13 @@ pub fn expression(
     function_impl(attr, item, true).unwrap_or_compile_error().into()
 }
 
+fn split_attrs(attrs: Vec<syn::Attribute>) -> (Vec<syn::Attribute>, Vec<syn::Attribute>) {
+    let (outer, inner): (Vec<_>, Vec<_>) = attrs.into_iter().partition(|attr| {
+        matches!(attr.style, syn::AttrStyle::Outer)
+    });
+    (outer, inner)
+}
+
 fn function_impl(
     attr_in: proc_macro::TokenStream,
     item: proc_macro::TokenStream,
@@ -1334,15 +1341,16 @@ fn function_impl(
         quote! {}
     };
 
-    let mut attrs_vec = input_fn_ast.attrs;
-    let export_attr_opt = remove_macro_export_attribute(&mut attrs_vec);
+    let attrs_vec = input_fn_ast.attrs;
+    let (outer_attrs_vec, inner_attrs_vec) = split_attrs(attrs_vec);
 
-    let attrs = quote!{ #(#attrs_vec)* };
+    let outer_attrs = quote!{ #(#outer_attrs_vec)* };
+    let inner_attrs = quote!{ #(#inner_attrs_vec)* };
     let mut out = quote! {
         {
             #[crabtime::eval_function(#attr)]
             fn #name() #output_tp {
-                #attrs
+                #inner_attrs
                 #args_setup
                 #args_code
                 #input_str
@@ -1357,7 +1365,7 @@ fn function_impl(
     out = quote! {
         #rust_analyzer_hints
 
-        #export_attr_opt
+        #outer_attrs
         macro_rules! #name {
             (#args_pattern) => #out;
         }
@@ -1389,9 +1397,4 @@ fn get_current_time() -> String {
     let minutes = (total_seconds / 60) % 60;
     let seconds = total_seconds % 60;
     format!("{hours:02}:{minutes:02}:{seconds:02} ({milliseconds:03})")
-}
-
-
-fn remove_macro_export_attribute(attrs: &mut Vec<syn::Attribute>) -> Option<syn::Attribute> {
-    attrs.iter().position(|attr| attr.path().is_ident("macro_export")).map(|pos| attrs.remove(pos))
 }
