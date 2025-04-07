@@ -297,6 +297,30 @@
 //! ```
 //!
 //! <br/>
+//!
+//! <h5><b>String interpolation using <code>format!<code></b></h5>
+//!
+//! To use template tags for outputting a String, you need to escape quotation marks (`"`).
+//!
+//! Below is an example for how to print URLs dynamically using the `format!` macro:
+//!
+//! ```rust
+//! #[crabtime::function]
+//! fn gen_urls(components: Vec<String>) {
+//!     for (idx, path) in components.iter().enumerate() {
+//!         let full_url = format!("\"{}\"", ["http://localhost:3000", path].join("/"));
+//!         crabtime::output! {
+//!             println!("{}", {{full_url}});
+//!         }
+//!     }
+//! }
+//!
+//! fn main() {
+//!     gen_urls!(["home", "about", "contact"]);
+//! }
+//! ```
+//!
+//! <br/>
 //! <br/>
 //!
 //! # 📥 Input
