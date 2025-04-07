@@ -124,7 +124,7 @@
 //! }
 //!
 //! fn test() {
-//!     let x = { gen_expr!() };
+//!     let x = gen_expr!();
 //! }
 //! ```
 //!
@@ -873,6 +873,8 @@ mod tests {
         empty_def_compilation!();
     }
 
+    // ===
+
     mod mod_a {
         #[crabtime::function]
         fn inter_module_macro() -> &str {
@@ -907,5 +909,18 @@ mod tests {
             }
         }
         interpolation_before_brace!();
+    }
+
+    // ===
+
+    mod mod_c {
+        #[crabtime::function]
+        fn fn_in_impl() -> &str {
+            "pub fn test(&self) {}"
+        }
+        struct Test;
+        impl Test {
+            fn_in_impl!();
+        }
     }
 }

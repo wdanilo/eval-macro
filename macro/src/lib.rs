@@ -1250,6 +1250,7 @@ fn eval_function_impl(
         /// Cached: {was_cached}
         /// Output Dir: {output_dir_str}
         /// Macro Options: {options_doc}
+        #[cfg(any())]
         const _: () = ();
         {output_code}
     ");
