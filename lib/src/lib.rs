@@ -802,7 +802,7 @@ pub use crabtime_internal::*;
 macro_rules! eval {
     ($($ts:tt)*) => {
         {
-            #[crabtime::eval_function(cache=false, content_base_name=true)]
+            #[crabtime::eval_function(cache=true, content_base_name=true)]
             fn run() -> _ {
                 $($ts)*
             }
