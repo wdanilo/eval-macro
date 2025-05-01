@@ -376,7 +376,9 @@ impl Paths {
     fn get_call_site_rel() -> PathBuf {
         // Sometimes `proc_macro::Span::call_site()` returns a relative path, sometimes an absolute
         // one. In the latter case, we need to discover the relative part from the project root.
-        let mut call_site_path = proc_macro::Span::call_site().source_file().path();
+        let mut call_site_path = proc_macro::Span::call_site()
+            .local_file()
+            .unwrap_or_default();
         call_site_path.set_extension("");
         if call_site_path.is_relative() {
             return call_site_path.to_path_buf();
