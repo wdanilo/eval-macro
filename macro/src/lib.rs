@@ -327,7 +327,7 @@ impl Paths {
             macro_name.to_string()
         };
         let call_site_path = Self::get_call_site_rel();
-        let output_dir = Self::get_output_root()?.join(&call_site_path).join(&name);
+        let output_dir = Self::get_output_root()?.join(&name);
         let target = path::find_parent(&output_dir, "target")?;
         let workspace = path::parent(target)?.to_path_buf();
         let call_site_file = workspace.join(&call_site_path);
