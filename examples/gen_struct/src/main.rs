@@ -23,5 +23,5 @@ fn main() {
         birthdate: "01/01/1970",
     };
 
-    println!("{}", data.name)
+    println!("{data:?}")
 }
