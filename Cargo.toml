@@ -1,11 +1,7 @@
 [workspace]
 package.edition = "2024"
 resolver = "3"
-members = [
-    "lib",
-    "macro",
-    "tests/*"
-]
+members = ["lib", "macro", "tests/*", "examples/*"]
 
 [profile.release]
 opt-level = 3
@@ -61,3 +57,4 @@ unwrap_used = "warn"
 #multiple_crate_versions = "warn"
 #indexing_slicing = "warn"
 #allow_attributes = "warn" // false positives
+

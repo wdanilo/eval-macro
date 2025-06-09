@@ -1,0 +1,11 @@
+[package]
+name = "example-struct"
+version = "0.1.0"
+edition.workspace = true
+publish = false
+
+[dependencies]
+crabtime = { path = "../../lib" }
+
+[lints]
+workspace = true
